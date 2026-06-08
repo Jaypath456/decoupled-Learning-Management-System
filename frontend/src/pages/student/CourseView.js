@@ -19,11 +19,12 @@ export default function CourseView() {
           api.get(`/courses/${courseId}/chapters/`),
           api.get(`/courses/${courseId}/enrollment-status/`),
         ]);
+
         setCourse(courseRes.data);
         setChapters(chaptersRes.data);
         setIsEnrolled(enrollRes.data.enrolled);
       } catch (err) {
-        console.error(err);
+        console.error("Error loading course:", err);
       } finally {
         setLoading(false);
       }
@@ -31,17 +32,19 @@ export default function CourseView() {
     fetchAll();
   }, [courseId]);
 
-  const handleEnroll = async () => {
+  const handleEnrollmentToggle = async () => {
     setEnrolling(true);
     try {
-      await api.post(`/courses/${courseId}/enroll/`);
-      setIsEnrolled(true);
-    } catch (err) {
-      if (err.response?.data?.error === 'Already enrolled in this course') {
-        setIsEnrolled(true);
+      if (isEnrolled) {
+        await api.delete(`/courses/${courseId}/enroll/`);
+        setIsEnrolled(false);
       } else {
-        alert('Could not join course.');
+        await api.post(`/courses/${courseId}/enroll/`);
+        setIsEnrolled(true);
       }
+    } catch (err) {
+      console.error(err);
+      alert('Action failed. Please try again.');
     } finally {
       setEnrolling(false);
     }
@@ -58,17 +61,21 @@ export default function CourseView() {
         </div>
         <h1>{course.title}</h1>
         <p className="course-hero-desc">{course.description}</p>
+        
         <div className="course-hero-meta">
-          <span>instructor:  {course.instructor.username}</span>
-          <span> {course.chapter_count} chapters</span>
-          <span> {course.enrolled_count} students</span>
+          <span>Instructor: {course.instructor.username}</span>
+          <span>{course.chapter_count} chapters</span>
+          <span>{course.enrolled_count} students</span>
         </div>
 
-        {!isEnrolled && (
-          <button onClick={handleEnroll} className="btn-primary" disabled={enrolling}>
-            {enrolling ? 'Joining...' : 'Join This Course'}
-          </button>
-        )}
+        <button 
+          onClick={handleEnrollmentToggle} 
+          className="btn-primary" 
+          disabled={enrolling}
+        >
+          {enrolling ? 'Processing...' : (isEnrolled ? 'Unenroll' : 'Join This Course')}
+        </button>
+
         {isEnrolled && (
           <span className="enrolled-tag"> You're enrolled</span>
         )}

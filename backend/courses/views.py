@@ -153,3 +153,16 @@ def my_courses(request):
 def enrollment_status(request, course_id):
     enrolled = Enrollment.objects.filter(student=request.user, course_id=course_id).exists()
     return Response({'enrolled': enrolled})
+
+@api_view(['POST', 'DELETE'])
+@permission_classes([IsAuthenticated])
+def manage_enrollment(request, course_id):
+    course = get_object_or_404(Course, id=course_id)
+    
+    if request.method == 'POST':
+        Enrollment.objects.get_or_create(student=request.user, course=course)
+        return Response({"message": "Enrolled"}, status=201)
+        
+    if request.method == 'DELETE':
+        Enrollment.objects.filter(student=request.user, course=course).delete()
+        return Response({"message": "Unenrolled"}, status=204)

@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import ProtectedRoute from './components/ProtectedRoute';
 import Navbar from './components/Navbar';
+import BackButton from './components/BackButton';
 
 // Auth pages
 import Login from './pages/auth/Login';
@@ -27,62 +28,59 @@ function AppRoutes() {
   const { user } = useAuth();
 
   return (
-    <>
-      <Navbar />
-      <Routes>
-        <Route
-          path="/"
-          element={
-            user
-              ? user.role === 'instructor'
-                ? <Navigate to="/instructor/dashboard" replace />
-                : <Navigate to="/student/catalog" replace />
-              : <Navigate to="/login" replace />
-          }
-        />
+    <Routes>
+      <Route
+        path="/"
+        element={
+          user
+            ? user.role === 'instructor'
+              ? <Navigate to="/instructor/dashboard" replace />
+              : <Navigate to="/student/catalog" replace />
+            : <Navigate to="/login" replace />
+        }
+      />
 
-        {/* Auth */}
-        <Route path="/login" element={<Login />} />
-        <Route path="/register" element={<Register />} />
+      {/* Auth */}
+      <Route path="/login" element={<Login />} />
+      <Route path="/register" element={<Register />} />
 
-        {/* Instructor routes */}
-        <Route path="/instructor/dashboard" element={
-          <ProtectedRoute role="instructor"><Dashboard /></ProtectedRoute>
-        } />
-        <Route path="/instructor/courses" element={
-          <ProtectedRoute role="instructor"><CourseList /></ProtectedRoute>
-        } />
-        <Route path="/instructor/courses/create" element={
-          <ProtectedRoute role="instructor"><CourseForm /></ProtectedRoute>
-        } />
-        <Route path="/instructor/courses/:courseId" element={
-          <ProtectedRoute role="instructor"><CourseDetail /></ProtectedRoute>
-        } />
-        <Route path="/instructor/courses/:courseId/edit" element={
-          <ProtectedRoute role="instructor"><CourseForm /></ProtectedRoute>
-        } />
-        <Route path="/instructor/courses/:courseId/chapters/create" element={
-          <ProtectedRoute role="instructor"><ChapterForm /></ProtectedRoute>
-        } />
-        <Route path="/instructor/chapters/:chapterId/edit" element={
-          <ProtectedRoute role="instructor"><ChapterForm /></ProtectedRoute>
-        } />
+      {/* Instructor routes */}
+      <Route path="/instructor/dashboard" element={
+        <ProtectedRoute role="instructor"><Dashboard /></ProtectedRoute>
+      } />
+      <Route path="/instructor/courses" element={
+        <ProtectedRoute role="instructor"><CourseList /></ProtectedRoute>
+      } />
+      <Route path="/instructor/courses/create" element={
+        <ProtectedRoute role="instructor"><CourseForm /></ProtectedRoute>
+      } />
+      <Route path="/instructor/courses/:courseId" element={
+        <ProtectedRoute role="instructor"><CourseDetail /></ProtectedRoute>
+      } />
+      <Route path="/instructor/courses/:courseId/edit" element={
+        <ProtectedRoute role="instructor"><CourseForm /></ProtectedRoute>
+      } />
+      <Route path="/instructor/courses/:courseId/chapters/create" element={
+        <ProtectedRoute role="instructor"><ChapterForm /></ProtectedRoute>
+      } />
+      <Route path="/instructor/chapters/:chapterId/edit" element={
+        <ProtectedRoute role="instructor"><ChapterForm /></ProtectedRoute>
+      } />
 
-        {/* Student routes */}
-        <Route path="/student/catalog" element={
-          <ProtectedRoute role="student"><Catalog /></ProtectedRoute>
-        } />
-        <Route path="/student/my-courses" element={
-          <ProtectedRoute role="student"><MyCourses /></ProtectedRoute>
-        } />
-        <Route path="/student/courses/:courseId" element={
-          <ProtectedRoute role="student"><CourseView /></ProtectedRoute>
-        } />
-        <Route path="/student/chapters/:chapterId" element={
-          <ProtectedRoute role="student"><ChapterReader /></ProtectedRoute>
-        } />
-      </Routes>
-    </>
+      {/* Student routes */}
+      <Route path="/student/catalog" element={
+        <ProtectedRoute role="student"><Catalog /></ProtectedRoute>
+      } />
+      <Route path="/student/my-courses" element={
+        <ProtectedRoute role="student"><MyCourses /></ProtectedRoute>
+      } />
+      <Route path="/student/courses/:courseId" element={
+        <ProtectedRoute role="student"><CourseView /></ProtectedRoute>
+      } />
+      <Route path="/student/chapters/:chapterId" element={
+        <ProtectedRoute role="student"><ChapterReader /></ProtectedRoute>
+      } />
+    </Routes>
   );
 }
 
@@ -90,7 +88,12 @@ export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <AppRoutes />
+        {/* Global UI Components rendered outside of Routes */}
+        <Navbar />
+        <BackButton />
+        <main className="container">
+          <AppRoutes />
+        </main>
       </AuthProvider>
     </BrowserRouter>
   );
