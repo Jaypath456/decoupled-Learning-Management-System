@@ -5,59 +5,38 @@ from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 from .models import Course, Chapter, Enrollment
 from .serializers import (
-    CourseSerializer, ChapterListSerializer,
-    ChapterSerializer, EnrollmentSerializer
+    CourseSerializer, 
+    ChapterSerializer, 
+    EnrollmentSerializer
 )
+from .permissions import IsInstructor, IsStudent
 
 # ─── Course Views ─────────────────────────────────────────────
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def course_list(request):
-    courses = Course.objects.filter(
-        is_published=True
-    ).select_related('instructor')
+    courses = Course.objects.filter(is_published=True).select_related('instructor')
     serializer = CourseSerializer(courses, many=True)
     return Response(serializer.data)
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsInstructor])
 def instructor_courses(request):
-    if request.user.role != 'instructor':
-        return Response(
-            {'error': 'Only instructors can view this'},
-            status=status.HTTP_403_FORBIDDEN
-        )
-
-    courses = Course.objects.filter(
-        instructor=request.user
-    ).select_related('instructor')
+    courses = Course.objects.filter(instructor=request.user).select_related('instructor')
     serializer = CourseSerializer(courses, many=True)
     return Response(serializer.data)
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsInstructor])
 def course_create(request):
-    if request.user.role != 'instructor':
-        return Response(
-            {'error': 'Only instructors can create courses'},
-            status=status.HTTP_403_FORBIDDEN
-        )
-
     serializer = CourseSerializer(data=request.data)
-
     if serializer.is_valid():
         course = serializer.save(instructor=request.user)
-        return Response(
-            CourseSerializer(course).data,
-            status=status.HTTP_201_CREATED
-        )
-
-    return Response(
-        serializer.errors,
-        status=status.HTTP_400_BAD_REQUEST
-    )
+        return Response(CourseSerializer(course).data, status=status.HTTP_201_CREATED)
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view(['GET', 'PUT', 'DELETE'])
@@ -67,38 +46,25 @@ def course_detail(request, course_id):
 
     if request.method == 'GET':
         if not course.is_published and course.instructor != request.user:
-            return Response(
-                {'error': 'This course is not available'},
-                status=status.HTTP_403_FORBIDDEN
-            )
-
+            return Response({'error': 'This course is not available'}, status=status.HTTP_403_FORBIDDEN)
         return Response(CourseSerializer(course).data)
 
+    # Permission check for modifying/deleting
     if course.instructor != request.user:
-        return Response(
-            {'error': 'Permission denied'},
-            status=status.HTTP_403_FORBIDDEN
-        )
+        return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
 
     if request.method == 'PUT':
-        serializer = CourseSerializer(
-            course,
-            data=request.data,
-            partial=True
-        )
-
+        serializer = CourseSerializer(course, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data)
-
-        return Response(
-            serializer.errors,
-            status=status.HTTP_400_BAD_REQUEST
-        )
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     course.delete()
     return Response(status=status.HTTP_204_NO_CONTENT)
 
+
+# ─── Chapter Views ─────────────────────────────────────────────
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -110,43 +76,25 @@ def chapter_list(request, course_id):
     elif course.is_published:
         chapters = Chapter.objects.filter(course=course, visibility='public')
     else:
-        return Response(
-            {'error': 'This course is not available'},
-            status=status.HTTP_403_FORBIDDEN
-        )
+        return Response({'error': 'This course is not available'}, status=status.HTTP_403_FORBIDDEN)
 
-    serializer = ChapterListSerializer(
-        chapters.order_by('order_index', 'id'),
-        many=True
-    )
-
+    serializer = ChapterSerializer(chapters.order_by('order_index', 'id'), many=True)
     return Response(serializer.data)
 
 
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsInstructor])
 def chapter_create(request, course_id):
     course = get_object_or_404(Course, id=course_id)
 
     if course.instructor != request.user:
-        return Response(
-            {'error': 'Permission denied'},
-            status=status.HTTP_403_FORBIDDEN
-        )
+        return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
 
     serializer = ChapterSerializer(data=request.data)
-
     if serializer.is_valid():
         chapter = serializer.save(course=course)
-        return Response(
-            ChapterSerializer(chapter).data,
-            status=status.HTTP_201_CREATED
-        )
-
-    return Response(
-        serializer.errors,
-        status=status.HTTP_400_BAD_REQUEST
-    )
+        return Response(ChapterSerializer(chapter).data, status=status.HTTP_201_CREATED)
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view(['GET', 'PUT', 'DELETE'])
@@ -158,110 +106,50 @@ def chapter_detail(request, chapter_id):
         if chapter.course.instructor == request.user:
             return Response(ChapterSerializer(chapter).data)
 
-        is_enrolled = Enrollment.objects.filter(
-            student=request.user,
-            course=chapter.course
-        ).exists()
-
-        if (
-            chapter.course.is_published
-            and chapter.visibility == 'public'
-            and is_enrolled
-        ):
+        is_enrolled = Enrollment.objects.filter(student=request.user, course=chapter.course).exists()
+        if chapter.course.is_published and chapter.visibility == 'public' and is_enrolled:
             return Response(ChapterSerializer(chapter).data)
 
-        return Response(
-            {'error': 'This chapter is not available'},
-            status=status.HTTP_403_FORBIDDEN
-        )
+        return Response({'error': 'This chapter is not available'}, status=status.HTTP_403_FORBIDDEN)
 
     if chapter.course.instructor != request.user:
-        return Response(
-            {'error': 'Permission denied'},
-            status=status.HTTP_403_FORBIDDEN
-        )
+        return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
 
     if request.method == 'PUT':
-        serializer = ChapterSerializer(
-            chapter,
-            data=request.data,
-            partial=True
-        )
-
+        serializer = ChapterSerializer(chapter, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data)
-
-        return Response(
-            serializer.errors,
-            status=status.HTTP_400_BAD_REQUEST
-        )
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     chapter.delete()
     return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+# ─── Enrollment Views ─────────────────────────────────────────────
+
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsStudent])
 def enroll(request, course_id):
     course = get_object_or_404(Course, id=course_id, is_published=True)
 
-    if request.user.role != 'student':
-        return Response(
-            {'error': 'Only students can join courses'},
-            status=status.HTTP_403_FORBIDDEN
-        )
+    if Enrollment.objects.filter(student=request.user, course=course).exists():
+        return Response({'error': 'Already enrolled in this course'}, status=status.HTTP_400_BAD_REQUEST)
 
-    if Enrollment.objects.filter(
-        student=request.user,
-        course=course
-    ).exists():
-        return Response(
-            {'error': 'Already enrolled in this course'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-    enrollment = Enrollment.objects.create(
-        student=request.user,
-        course=course
-    )
-
-    return Response(
-        EnrollmentSerializer(enrollment).data,
-        status=status.HTTP_201_CREATED
-    )
+    enrollment = Enrollment.objects.create(student=request.user, course=course)
+    return Response(EnrollmentSerializer(enrollment).data, status=status.HTTP_201_CREATED)
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsStudent])
 def my_courses(request):
-    if request.user.role != 'student':
-        return Response(
-            {'error': 'Only students can view joined courses'},
-            status=status.HTTP_403_FORBIDDEN
-        )
-
-    enrollments = Enrollment.objects.filter(
-        student=request.user
-    ).select_related('course', 'course__instructor')
-
-    serializer = EnrollmentSerializer(
-        enrollments,
-        many=True
-    )
-
+    enrollments = Enrollment.objects.filter(student=request.user).select_related('course', 'course__instructor')
+    serializer = EnrollmentSerializer(enrollments, many=True)
     return Response(serializer.data)
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsStudent])
 def enrollment_status(request, course_id):
-    if request.user.role != 'student':
-        return Response({'enrolled': False})
-
-    enrolled = Enrollment.objects.filter(
-        student=request.user,
-        course_id=course_id
-    ).exists()
-
+    enrolled = Enrollment.objects.filter(student=request.user, course_id=course_id).exists()
     return Response({'enrolled': enrolled})

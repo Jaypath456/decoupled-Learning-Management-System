@@ -19,6 +19,9 @@ export default function ChapterForm() {
   const [loading, setLoading] = useState(false);
   const [loadingChapter, setLoadingChapter] = useState(isEditing);
   const [error, setError] = useState('');
+  
+  // NEW: State to track if the form has been modified
+  const [isDirty, setIsDirty] = useState(false);
 
   useEffect(() => {
     if (isEditing) {
@@ -39,8 +42,26 @@ export default function ChapterForm() {
     }
   }, [chapterId, isEditing]);
 
+  // NEW: Effect to handle browser refresh/close warnings
+  useEffect(() => {
+    const handleBeforeUnload = (e) => {
+      if (isDirty) {
+        e.preventDefault();
+        e.returnValue = ''; // Standard browser way to trigger the "Leave site?" prompt
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [isDirty]);
+
   const handleChange = (e) => {
-    setForm({ ...form, [e.target.name]: e.target.value });
+    setForm({ ...form, [e.target.name]: e.target.value.trim() });
+    setIsDirty(true); // Mark form as modified
+  };
+
+  const handleContentChange = (newContent) => {
+    setContent(newContent);
+    setIsDirty(true); // Mark form as modified when editor content changes
   };
 
   const handleSubmit = async (e) => {
@@ -52,9 +73,11 @@ export default function ChapterForm() {
     try {
       if (isEditing) {
         await api.put(`/chapters/${chapterId}/`, payload);
+        setIsDirty(false); // Reset so warning doesn't show
         navigate(`/instructor/courses/${courseId || chapterCourseId}`);
       } else {
         await api.post(`/courses/${courseId}/chapters/create/`, payload);
+        setIsDirty(false); // Reset so warning doesn't show
         navigate(`/instructor/courses/${courseId}`);
       }
     } catch (err) {
@@ -65,6 +88,10 @@ export default function ChapterForm() {
   };
 
   const handleCancel = () => {
+    if (isDirty && !window.confirm('You have unsaved changes. Are you sure you want to cancel?')) {
+      return;
+    }
+    setIsDirty(false);
     navigate(-1);
   };
 
@@ -89,7 +116,7 @@ export default function ChapterForm() {
                 name="title"
                 value={form.title}
                 onChange={handleChange}
-                placeholder="e.g. Introduction to Variables"
+                placeholder="Enter your chapter title..."
                 required
               />
             </div>
@@ -121,7 +148,7 @@ export default function ChapterForm() {
             </p>
             <PlateEditor
               value={content}
-              onChange={setContent}
+              onChange={handleContentChange} // Use wrapper to mark dirty
             />
           </div>
         </div>

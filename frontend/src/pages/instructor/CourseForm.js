@@ -71,7 +71,7 @@ export default function CourseForm() {
               name="title"
               value={form.title}
               onChange={handleChange}
-              placeholder="e.g. Introduction to Python"
+              placeholder="Enter the Course title..."
               required
             />
           </div>
@@ -83,7 +83,7 @@ export default function CourseForm() {
               value={form.description}
               onChange={handleChange}
               rows={4}
-              placeholder="What will students learn in this course?"
+              placeholder="Enter the description... "
             />
           </div>
 

@@ -1,75 +1,90 @@
 import React, { useCallback, useMemo } from 'react';
-import { Transforms, Editor, Element as SlateElement } from 'slate';
-import { Plate, PlateContent, useEditorRef, usePlateEditor } from '@udecode/plate/react';
+import { Editor, Element as SlateElement, Transforms } from 'slate';
+import {
+  Plate,
+  PlateContent,
+  useEditorRef,
+  usePlateEditor,
+} from '@udecode/plate/react';
 import './PlateEditor.css';
 
-// Default empty document structure (Plate.js compatible JSON format)
+// Keep a default paragraph so the editor never starts completely empty
 export const emptyDocument = [
-  { type: 'paragraph', children: [{ text: '' }] }
+  {
+    type: 'paragraph',
+    children: [{ text: '' }],
+  },
 ];
 
-// ─── Toolbar Button ────────────────────────────────────────────
 function ToolbarButton({ active, onMouseDown, children, title }) {
   return (
     <button
-      className={`toolbar-btn ${active ? 'active' : ''}`}
-      onMouseDown={onMouseDown}
-      title={title}
       type="button"
+      title={title}
+      onMouseDown={onMouseDown}
+      className={`toolbar-btn ${active ? 'active' : ''}`}
     >
       {children}
     </button>
   );
 }
 
-// ─── Mark helpers ──────────────────────────────────────────────
-const isMarkActive = (editor, format) => {
+const LIST_TYPES = ['bulleted-list', 'numbered-list'];
+
+function isMarkActive(editor, format) {
   const marks = Editor.marks(editor);
   return marks ? marks[format] === true : false;
-};
+}
 
-const toggleMark = (editor, format) => {
-  const isActive = isMarkActive(editor, format);
-  if (isActive) {
+function toggleMark(editor, format) {
+  if (isMarkActive(editor, format)) {
     Editor.removeMark(editor, format);
   } else {
     Editor.addMark(editor, format, true);
   }
-};
+}
 
-// ─── Block helpers ─────────────────────────────────────────────
-const LIST_TYPES = ['bulleted-list', 'numbered-list'];
+function isBlockActive(editor, format) {
+  if (!editor.selection) return false;
 
-const isBlockActive = (editor, format) => {
-  const { selection } = editor;
-  if (!selection) return false;
   const [match] = Array.from(
     Editor.nodes(editor, {
-      at: Editor.unhangRange(editor, selection),
-      match: n => !Editor.isEditor(n) && SlateElement.isElement(n) && n.type === format,
+      at: Editor.unhangRange(editor, editor.selection),
+      match: (node) =>
+        !Editor.isEditor(node) &&
+        SlateElement.isElement(node) &&
+        node.type === format,
     })
   );
-  return !!match;
-};
 
-const toggleBlock = (editor, format) => {
-  const isActive = isBlockActive(editor, format);
+  return !!match;
+}
+
+function toggleBlock(editor, format) {
+  const active = isBlockActive(editor, format);
   const isList = LIST_TYPES.includes(format);
 
+  // Prevent nested lists from getting messy
   Transforms.unwrapNodes(editor, {
-    match: n => !Editor.isEditor(n) && SlateElement.isElement(n) && LIST_TYPES.includes(n.type),
+    match: (node) =>
+      !Editor.isEditor(node) &&
+      SlateElement.isElement(node) &&
+      LIST_TYPES.includes(node.type),
     split: true,
   });
 
-  const newType = isActive ? 'paragraph' : isList ? 'list-item' : format;
-  Transforms.setNodes(editor, { type: newType });
+  Transforms.setNodes(editor, {
+    type: active ? 'paragraph' : isList ? 'list-item' : format,
+  });
 
-  if (!isActive && isList) {
-    Transforms.wrapNodes(editor, { type: format, children: [] });
+  if (!active && isList) {
+    Transforms.wrapNodes(editor, {
+      type: format,
+      children: [],
+    });
   }
-};
+}
 
-// ─── Toolbar ───────────────────────────────────────────────────
 function Toolbar() {
   const editor = useEditorRef();
 
@@ -77,32 +92,44 @@ function Toolbar() {
     <div className="editor-toolbar">
       <ToolbarButton
         active={isMarkActive(editor, 'bold')}
-        onMouseDown={(e) => { e.preventDefault(); toggleMark(editor, 'bold'); }}
         title="Bold"
+        onMouseDown={(e) => {
+          e.preventDefault();
+          toggleMark(editor, 'bold');
+        }}
       >
         <b>B</b>
       </ToolbarButton>
 
       <ToolbarButton
         active={isMarkActive(editor, 'italic')}
-        onMouseDown={(e) => { e.preventDefault(); toggleMark(editor, 'italic'); }}
         title="Italic"
+        onMouseDown={(e) => {
+          e.preventDefault();
+          toggleMark(editor, 'italic');
+        }}
       >
         <i>I</i>
       </ToolbarButton>
 
       <ToolbarButton
         active={isMarkActive(editor, 'underline')}
-        onMouseDown={(e) => { e.preventDefault(); toggleMark(editor, 'underline'); }}
         title="Underline"
+        onMouseDown={(e) => {
+          e.preventDefault();
+          toggleMark(editor, 'underline');
+        }}
       >
         <u>U</u>
       </ToolbarButton>
 
       <ToolbarButton
         active={isMarkActive(editor, 'code')}
-        onMouseDown={(e) => { e.preventDefault(); toggleMark(editor, 'code'); }}
         title="Inline Code"
+        onMouseDown={(e) => {
+          e.preventDefault();
+          toggleMark(editor, 'code');
+        }}
       >
         {'</>'}
       </ToolbarButton>
@@ -111,16 +138,22 @@ function Toolbar() {
 
       <ToolbarButton
         active={isBlockActive(editor, 'heading-one')}
-        onMouseDown={(e) => { e.preventDefault(); toggleBlock(editor, 'heading-one'); }}
         title="Heading 1"
+        onMouseDown={(e) => {
+          e.preventDefault();
+          toggleBlock(editor, 'heading-one');
+        }}
       >
         H1
       </ToolbarButton>
 
       <ToolbarButton
         active={isBlockActive(editor, 'heading-two')}
-        onMouseDown={(e) => { e.preventDefault(); toggleBlock(editor, 'heading-two'); }}
         title="Heading 2"
+        onMouseDown={(e) => {
+          e.preventDefault();
+          toggleBlock(editor, 'heading-two');
+        }}
       >
         H2
       </ToolbarButton>
@@ -129,24 +162,33 @@ function Toolbar() {
 
       <ToolbarButton
         active={isBlockActive(editor, 'bulleted-list')}
-        onMouseDown={(e) => { e.preventDefault(); toggleBlock(editor, 'bulleted-list'); }}
         title="Bullet List"
+        onMouseDown={(e) => {
+          e.preventDefault();
+          toggleBlock(editor, 'bulleted-list');
+        }}
       >
         • List
       </ToolbarButton>
 
       <ToolbarButton
         active={isBlockActive(editor, 'numbered-list')}
-        onMouseDown={(e) => { e.preventDefault(); toggleBlock(editor, 'numbered-list'); }}
         title="Numbered List"
+        onMouseDown={(e) => {
+          e.preventDefault();
+          toggleBlock(editor, 'numbered-list');
+        }}
       >
         1. List
       </ToolbarButton>
 
       <ToolbarButton
         active={isBlockActive(editor, 'block-quote')}
-        onMouseDown={(e) => { e.preventDefault(); toggleBlock(editor, 'block-quote'); }}
         title="Quote"
+        onMouseDown={(e) => {
+          e.preventDefault();
+          toggleBlock(editor, 'block-quote');
+        }}
       >
         ❝
       </ToolbarButton>
@@ -154,50 +196,80 @@ function Toolbar() {
   );
 }
 
-// ─── Element Renderer ──────────────────────────────────────────
-function Element({ attributes, children, element }) {
+function EditorElement({ attributes, children, element }) {
   switch (element.type) {
     case 'heading-one':
       return <h1 {...attributes}>{children}</h1>;
+
     case 'heading-two':
       return <h2 {...attributes}>{children}</h2>;
+
     case 'block-quote':
       return <blockquote {...attributes}>{children}</blockquote>;
+
     case 'bulleted-list':
       return <ul {...attributes}>{children}</ul>;
+
     case 'numbered-list':
       return <ol {...attributes}>{children}</ol>;
+
     case 'list-item':
       return <li {...attributes}>{children}</li>;
+
     default:
       return <p {...attributes}>{children}</p>;
   }
 }
 
-// ─── Leaf Renderer ─────────────────────────────────────────────
-function Leaf({ attributes, children, leaf }) {
-  if (leaf.bold) children = <strong>{children}</strong>;
-  if (leaf.italic) children = <em>{children}</em>;
-  if (leaf.underline) children = <u>{children}</u>;
-  if (leaf.code) children = <code>{children}</code>;
+function EditorLeaf({ attributes, children, leaf }) {
+  if (leaf.bold) {
+    children = <strong>{children}</strong>;
+  }
+
+  if (leaf.italic) {
+    children = <em>{children}</em>;
+  }
+
+  if (leaf.underline) {
+    children = <u>{children}</u>;
+  }
+
+  if (leaf.code) {
+    children = <code>{children}</code>;
+  }
+
   return <span {...attributes}>{children}</span>;
 }
 
-// ─── Main Editor ───────────────────────────────────────────────
-export default function PlateEditor({ value, onChange, readOnly = false }) {
+export default function PlateEditor({
+  value,
+  onChange,
+  readOnly = false,
+}) {
   const initialValue = useMemo(() => {
     if (!value || (Array.isArray(value) && value.length === 0)) {
       return emptyDocument;
     }
+
     return value;
   }, [value]);
 
-  const editor = usePlateEditor({
-    value: initialValue,
-  }, []);
+  const editor = usePlateEditor(
+    {
+      value: initialValue,
+    },
+    []
+  );
 
-  const renderElement = useCallback((props) => <Element {...props} />, []);
-  const renderLeaf = useCallback((props) => <Leaf {...props} />, []);
+  const renderElement = useCallback(
+    (props) => <EditorElement {...props} />,
+    []
+  );
+
+  const renderLeaf = useCallback(
+    (props) => <EditorLeaf {...props} />,
+    []
+  );
 
   if (readOnly) {
     return (
@@ -217,16 +289,17 @@ export default function PlateEditor({ value, onChange, readOnly = false }) {
     <Plate
       editor={editor}
       onValueChange={({ value: newValue }) => {
-        if (onChange) onChange(newValue);
+        onChange?.(newValue);
       }}
     >
       <div className="editor-wrapper">
         <Toolbar />
+
         <div className="editor-body">
           <PlateContent
             renderElement={renderElement}
             renderLeaf={renderLeaf}
-            placeholder="Start writing your chapter content..."
+            placeholder="chapter content..."
             spellCheck
             autoFocus
           />

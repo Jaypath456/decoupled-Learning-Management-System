@@ -43,7 +43,7 @@ export default function Navbar() {
       </div>
 
       <div className="navbar-right">
-        <span className="user-badge">{user.role === 'instructor' ? '📝' : '🎓'} {user.username}</span>
+        <span className="user-badge">{user.username}</span>
         <button className="logout-btn" onClick={handleLogout}>Logout</button>
       </div>
     </nav>

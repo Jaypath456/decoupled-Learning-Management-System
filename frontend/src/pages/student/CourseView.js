@@ -59,9 +59,9 @@ export default function CourseView() {
         <h1>{course.title}</h1>
         <p className="course-hero-desc">{course.description}</p>
         <div className="course-hero-meta">
-          <span>👤 {course.instructor.username}</span>
-          <span>📚 {course.chapter_count} chapters</span>
-          <span>👥 {course.enrolled_count} students</span>
+          <span>instructor:  {course.instructor.username}</span>
+          <span> {course.chapter_count} chapters</span>
+          <span> {course.enrolled_count} students</span>
         </div>
 
         {!isEnrolled && (
@@ -70,7 +70,7 @@ export default function CourseView() {
           </button>
         )}
         {isEnrolled && (
-          <span className="enrolled-tag">✓ You're enrolled</span>
+          <span className="enrolled-tag"> You're enrolled</span>
         )}
       </div>
 

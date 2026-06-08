@@ -4,16 +4,18 @@
   padding: 32px 24px;
 }
 
+/* Page header */
+
 .page-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  margin-bottom: 28px;
   gap: 16px;
+  margin-bottom: 28px;
 }
 
 .page-header h1 {
-  margin: 0 0 4px 0;
+  margin: 0 0 4px;
   font-size: 24px;
   color: #111827;
 }
@@ -23,6 +25,8 @@
   gap: 10px;
   flex-shrink: 0;
 }
+
+/* Section titles and breadcrumbs */
 
 .section-header {
   display: flex;
@@ -38,21 +42,21 @@
 }
 
 .section-title {
+  margin: 28px 0 14px;
   font-size: 18px;
   color: #111827;
-  margin: 28px 0 14px;
 }
 
 .text-muted {
-  color: #6b7280;
-  font-size: 14px;
   margin: 4px 0 0;
+  font-size: 14px;
+  color: #6b7280;
 }
 
 .breadcrumb {
+  margin-bottom: 6px;
   font-size: 13px;
   color: #9ca3af;
-  margin-bottom: 6px;
 }
 
 .breadcrumb a {
@@ -60,7 +64,8 @@
   text-decoration: none;
 }
 
-/* Stats */
+/* Dashboard stats */
+
 .stats-row {
   display: flex;
   gap: 16px;
@@ -69,26 +74,27 @@
 
 .stat-card {
   flex: 1;
+  padding: 20px;
   background: #fff;
   border: 1px solid #e5e7eb;
   border-radius: 8px;
-  padding: 20px;
 }
 
 .stat-number {
   font-size: 32px;
   font-weight: 700;
-  color: #4f46e5;
   line-height: 1;
+  color: #4f46e5;
 }
 
 .stat-label {
+  margin-top: 4px;
   font-size: 13px;
   color: #6b7280;
-  margin-top: 4px;
 }
 
-/* Course grid */
+/* Course cards */
+
 .course-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
@@ -96,10 +102,10 @@
 }
 
 .course-card {
+  padding: 20px;
   background: #fff;
   border: 1px solid #e5e7eb;
   border-radius: 8px;
-  padding: 20px;
 }
 
 .course-card-header {
@@ -115,9 +121,9 @@
 .course-meta {
   display: flex;
   gap: 16px;
+  margin-top: 12px;
   font-size: 13px;
   color: #6b7280;
-  margin-top: 12px;
 }
 
 .card-actions {
@@ -126,13 +132,14 @@
   border-top: 1px solid #f3f4f6;
 }
 
-/* Badges */
+/* Status badges */
+
 .badge {
   display: inline-block;
   padding: 2px 8px;
-  border-radius: 4px;
   font-size: 12px;
   font-weight: 500;
+  border-radius: 4px;
 }
 
 .badge-published {
@@ -155,32 +162,33 @@
   color: #6b7280;
 }
 
-/* Table */
+/* Tables */
+
 .data-table {
   width: 100%;
-  border-collapse: collapse;
+  overflow: hidden;
   background: #fff;
   border: 1px solid #e5e7eb;
+  border-collapse: collapse;
   border-radius: 8px;
-  overflow: hidden;
 }
 
 .data-table th {
-  text-align: left;
   padding: 12px 16px;
+  text-align: left;
   font-size: 12px;
   font-weight: 600;
-  color: #6b7280;
-  text-transform: uppercase;
   letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #6b7280;
   background: #f9fafb;
   border-bottom: 1px solid #e5e7eb;
 }
 
 .data-table td {
   padding: 14px 16px;
-  border-bottom: 1px solid #f3f4f6;
   font-size: 14px;
+  border-bottom: 1px solid #f3f4f6;
 }
 
 .data-table tr:last-child td {
@@ -193,17 +201,23 @@
 }
 
 /* Buttons */
+
+.btn-primary,
+.btn-secondary,
+.btn-sm {
+  text-decoration: none;
+  cursor: pointer;
+}
+
 .btn-primary {
   display: inline-block;
   padding: 9px 18px;
-  background: #4f46e5;
-  color: white;
-  border: none;
-  border-radius: 6px;
   font-size: 14px;
   font-weight: 500;
-  cursor: pointer;
-  text-decoration: none;
+  color: white;
+  background: #4f46e5;
+  border: none;
+  border-radius: 6px;
 }
 
 .btn-primary:hover {
@@ -213,13 +227,11 @@
 .btn-secondary {
   display: inline-block;
   padding: 9px 18px;
-  background: white;
+  font-size: 14px;
   color: #374151;
+  background: white;
   border: 1px solid #d1d5db;
   border-radius: 6px;
-  font-size: 14px;
-  cursor: pointer;
-  text-decoration: none;
 }
 
 .btn-secondary:hover {
@@ -228,16 +240,16 @@
 
 .btn-sm {
   padding: 5px 12px;
+  font-size: 13px;
+  color: #374151;
+  background: white;
   border: 1px solid #d1d5db;
   border-radius: 4px;
-  background: white;
-  font-size: 13px;
-  cursor: pointer;
-  text-decoration: none;
-  color: #374151;
 }
 
-.btn-sm:hover { background: #f9fafb; }
+.btn-sm:hover {
+  background: #f9fafb;
+}
 
 .btn-danger {
   color: #dc2626;
@@ -253,7 +265,8 @@
   gap: 8px;
 }
 
-/* Chapter list */
+/* Chapter management */
+
 .chapter-list {
   display: flex;
   flex-direction: column;
@@ -277,23 +290,23 @@
 }
 
 .chapter-number {
-  width: 28px;
-  height: 28px;
-  background: #f3f4f6;
-  border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 13px;
-  color: #6b7280;
-  font-weight: 600;
+  width: 28px;
+  height: 28px;
   flex-shrink: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #6b7280;
+  background: #f3f4f6;
+  border-radius: 50%;
 }
 
 .chapter-title {
+  font-size: 14px;
   font-weight: 500;
   color: #111827;
-  font-size: 14px;
 }
 
 .chapter-meta {
@@ -306,12 +319,13 @@
 }
 
 /* Forms */
+
 .form-card {
+  margin-bottom: 20px;
+  padding: 24px;
   background: #fff;
   border: 1px solid #e5e7eb;
   border-radius: 8px;
-  padding: 24px;
-  margin-bottom: 20px;
 }
 
 .form-group {
@@ -321,7 +335,9 @@
   margin-bottom: 16px;
 }
 
-.form-group:last-child { margin-bottom: 0; }
+.form-group:last-child {
+  margin-bottom: 0;
+}
 
 .form-group label {
   font-size: 13px;
@@ -333,12 +349,12 @@
 .form-group textarea,
 .form-group select {
   padding: 9px 12px;
+  font-family: inherit;
+  font-size: 14px;
   border: 1px solid #d1d5db;
   border-radius: 6px;
-  font-size: 14px;
   outline: none;
   transition: border-color 0.15s;
-  font-family: inherit;
 }
 
 .form-group input:focus,
@@ -348,30 +364,30 @@
 }
 
 .form-hint {
+  margin: 0 0 8px;
   font-size: 12px;
   color: #9ca3af;
-  margin: 0 0 8px;
 }
 
 .form-row {
   display: flex;
-  gap: 16px;
   align-items: flex-start;
+  gap: 16px;
 }
 
 .checkbox-group label {
   display: flex;
   align-items: center;
   gap: 8px;
-  cursor: pointer;
   font-size: 14px;
   font-weight: normal;
+  cursor: pointer;
 }
 
 .form-actions {
   display: flex;
-  gap: 10px;
   justify-content: flex-end;
+  gap: 10px;
 }
 
 .info-bar {
@@ -383,24 +399,27 @@
   color: #6b7280;
 }
 
-/* Empty state */
+/* Empty and error states */
+
 .empty-state {
-  text-align: center;
   padding: 48px 24px;
+  text-align: center;
+  color: #6b7280;
   background: #f9fafb;
   border: 1px dashed #d1d5db;
   border-radius: 8px;
-  color: #6b7280;
 }
 
-.empty-state p { margin-bottom: 16px; }
+.empty-state p {
+  margin-bottom: 16px;
+}
 
 .error-msg {
+  margin-bottom: 16px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: #dc2626;
   background: #fef2f2;
   border: 1px solid #fecaca;
-  color: #dc2626;
-  padding: 10px 14px;
   border-radius: 6px;
-  font-size: 13px;
-  margin-bottom: 16px;
 }

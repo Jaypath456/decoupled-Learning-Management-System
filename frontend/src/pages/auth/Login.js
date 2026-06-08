@@ -11,24 +11,30 @@ export default function Login() {
   const navigate = useNavigate();
 
   const handleChange = (e) => {
-    setForm({ ...form, [e.target.name]: e.target.value });
+    setForm({ ...form, [e.target.name]: e.target.value.trim() });
   };
-
-  const handleSubmit = async (e) => {
+const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
     setLoading(true);
+
     try {
       const user = await login(form.username, form.password);
+      
       if (user.role === 'instructor') {
         navigate('/instructor/dashboard');
       } else {
         navigate('/student/catalog');
       }
+      
     } catch (err) {
-      setError(err.response?.data?.error || 'Login failed');
-    } finally {
       setLoading(false);
+      setError(err.response?.data?.error || 'Login failed');
+      
+      setForm((prev) => ({
+        ...prev,
+        password: ''
+      }));
     }
   };
 

@@ -7,7 +7,6 @@ const AUTH_STORAGE_KEYS = ['access_token', 'refresh_token', 'user'];
 const clearStoredAuth = () => {
   AUTH_STORAGE_KEYS.forEach((key) => {
     sessionStorage.removeItem(key);
-    localStorage.removeItem(key);
   });
 };
 
@@ -17,8 +16,6 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     const loadUser = async () => {
-      AUTH_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key));
-
       if (!sessionStorage.getItem('access_token')) {
         setLoading(false);
         return;

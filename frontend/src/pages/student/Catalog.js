@@ -60,8 +60,8 @@ export default function Catalog() {
               </p>
               <div className="course-card-footer">
                 <div className="course-stats">
-                  <span>📚 {course.chapter_count} chapters</span>
-                  <span>👥 {course.enrolled_count} students</span>
+                  <span> {course.chapter_count} chapters</span>
+                  <span> {course.enrolled_count} students</span>
                 </div>
                 <div className="card-btns">
                   <Link to={`/student/courses/${course.id}`} className="btn-outline">

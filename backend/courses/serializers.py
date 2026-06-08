@@ -18,16 +18,6 @@ class ChapterSerializer(serializers.ModelSerializer):
         ]
 
 
-class ChapterListSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Chapter
-        fields = [
-            'id',
-            'course',
-            'title',
-            'visibility',
-            'order_index'
-        ]
 
 
 class CourseSerializer(serializers.ModelSerializer):
