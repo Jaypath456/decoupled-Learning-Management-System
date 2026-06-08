@@ -4,13 +4,18 @@ export default function BackButton() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  if (location.pathname === '/student/catalog' || location.pathname === '/instructor/dashboard') {
-    return null;
-  }
+  const handleBack = () => {
+    if (location.pathname.includes('/create') || location.pathname.includes('/edit')) {
+      if (window.confirm("You have unsaved changes. Leave anyway?")) {
+        sessionStorage.removeItem('chapter_draft');
+        navigate(-1);
+      }
+    } else {
+      navigate(-1);
+    }
+  };
 
-  return (
-    <button className="btn-back" onClick={() => navigate(-1)}>
-      ← Back
-    </button>
-  );
+  if (['/student/catalog', '/instructor/dashboard'].includes(location.pathname)) return null;
+
+  return <button className="btn-back" onClick={handleBack}>← Back</button>;
 }
