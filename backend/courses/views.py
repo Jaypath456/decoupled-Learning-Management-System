@@ -166,3 +166,20 @@ def manage_enrollment(request, course_id):
     if request.method == 'DELETE':
         Enrollment.objects.filter(student=request.user, course=course).delete()
         return Response({"message": "Unenrolled"}, status=204)
+    
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, IsInstructor])
+def course_enrolled_students(request, course_id):
+    course = get_object_or_404(Course, id=course_id, instructor=request.user)
+    # Get all enrollments for this course
+    enrollments = Enrollment.objects.filter(course=course).select_related('student')
+    
+    # Extract student data
+    data = [{
+        "id": e.student.id,
+        "name": e.student.username,
+        "email": e.student.email,
+        "phone": getattr(e.student, 'phone_number', 'N/A') 
+    } for e in enrollments]
+    
+    return Response(data)

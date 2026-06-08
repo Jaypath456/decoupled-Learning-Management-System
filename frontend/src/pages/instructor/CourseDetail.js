@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import api from '../../api/axios';
 import './instructor.css';
@@ -9,7 +9,8 @@ export default function CourseDetail() {
   const [chapters, setChapters] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  const fetchData = async () => {
+
+  const fetchData = useCallback(async () => {
     try {
       const [courseRes, chaptersRes] = await Promise.all([
         api.get(`/courses/${courseId}/`),
@@ -22,12 +23,11 @@ export default function CourseDetail() {
     } finally {
       setLoading(false);
     }
-  };
-
-  useEffect(() => {
-    fetchData(); // eslint-disable-next-line
   }, [courseId]);
 
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
   const handleDeleteChapter = async (chapterId) => {
     if (!window.confirm('Delete this chapter?')) return;
     await api.delete(`/chapters/${chapterId}/`);
@@ -69,7 +69,11 @@ export default function CourseDetail() {
         <span className={`badge ${course.is_published ? 'badge-published' : 'badge-draft'}`}>
           {course.is_published ? 'Published' : 'Draft'}
         </span>
-        <span>{course.enrolled_count} students enrolled</span>
+        
+        <Link to={`/instructor/courses/${courseId}/students`} className="clickable-link">
+          {course.enrolled_count} students enrolled (View all)
+        </Link>
+        
         <span>{chapters.length} chapters</span>
       </div>
 

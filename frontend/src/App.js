@@ -15,6 +15,7 @@ import CourseList from './pages/instructor/CourseList';
 import CourseForm from './pages/instructor/CourseForm';
 import CourseDetail from './pages/instructor/CourseDetail';
 import ChapterForm from './pages/instructor/ChapterForm';
+import StudentList from './pages/instructor/StudentList';
 
 // Student pages
 import Catalog from './pages/student/Catalog';
@@ -65,6 +66,9 @@ function AppRoutes() {
       } />
       <Route path="/instructor/chapters/:chapterId/edit" element={
         <ProtectedRoute role="instructor"><ChapterForm /></ProtectedRoute>
+      } />
+      <Route path="/instructor/courses/:courseId/students" element={
+        <ProtectedRoute role="instructor"><StudentList /></ProtectedRoute>
       } />
 
       {/* Student routes */}
