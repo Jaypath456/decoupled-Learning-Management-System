@@ -14,8 +14,9 @@ export default function BackButton() {
       navigate(-1);
     }
   };
-
-  if (['/student/catalog', '/instructor/dashboard'].includes(location.pathname)) return null;
+  if (['/student/catalog', '/instructor/dashboard', '/login'].includes(location.pathname)) {
+    return null;
+  }
 
   return <button className="btn-back" onClick={handleBack}>← Back</button>;
 }

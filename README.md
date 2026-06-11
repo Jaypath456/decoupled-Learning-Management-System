@@ -27,18 +27,46 @@ frontend/
 
 ## Setup Instructions
 
-### 1. Backend
+
+## 1. Database Setup (PostgreSQL)
+Ensure you have PostgreSQL installed and running. Create a new database for the project:
+
+-- Log into your PostgreSQL instance
+psql -U postgres
+
+-- Create the application user
+CREATE ROLE "classavo_user" WITH LOGIN PASSWORD 'your_secure_password';
+
+-- Create the database and assign the user as the owner
+CREATE DATABASE "classavo_db" OWNER "classavo_user";
+
+## 2. Configuration
+
+### This project uses environment variables to manage the API connection, ensuring the application remains environment-agnostic.
+
+# Frontend setup
+- Create a `.env` file in the `frontend/` directory.
+- Copy the contents of `frontend/.env.example` into your new `.env` file.
+- Set `REACT_APP_API_URL` to your backend endpoint (e.g., `http://localhost:8000/api`).
+
+# Backend setup
+- Create a `.env` file in the `backend/` directory.
+- Copy the contents of `backend/.env.example` into your new `.env` file.
+- Update database credentials as required.
+
+
+## 3. Backend
 
 ```bash
 cd backend
-python -m venv venv
+python -m venv .venv
 
 # Activate virtual environment
 # Windows:
-venv\Scripts\activate
+.venv\Scripts\activate
 
 # macOS/Linux:
-source venv/bin/activate
+source .venv/bin/activate
 
 pip install -r requirements.txt
 python manage.py migrate
@@ -50,7 +78,7 @@ The API runs at:
 http://localhost:8000
 ```
 
-### 2. Frontend
+## 4. Frontend
 
 ```bash
 cd frontend
@@ -63,13 +91,7 @@ The React app runs at:
 http://localhost:3000
 ```
 
-## Configuration
 
-This project uses environment variables to manage the API connection, ensuring the application remains environment-agnostic.
-
-- Create a `.env` file in the `frontend/` directory.
-- Copy the contents of `.env.example` into your new `.env` file.
-- Set `REACT_APP_API_URL` to your backend endpoint (e.g., `http://localhost:8000/api`).
 
 ## Key Features
 
