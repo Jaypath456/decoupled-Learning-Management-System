@@ -1,115 +1,44 @@
-# Classavo LMS
+# Classavo: Decoupled Learning Management System
 
-A Learning Management System built for Classavo.
+A comprehensive, scalable educational platform designed to facilitate course management, interactive content creation, real-time communication, scheduling, and automated assessments for students and professors. 
 
-## Tech Stack
+Built with a **Decoupled Client-Server (REST API)** architecture, this platform leverages the robustness of Django for the backend and the dynamic component-based rendering of React for the frontend.
 
-- **Backend:** Django, Django REST Framework, SimpleJWT
-- **Frontend:** React, React Router, Plate.js, Axios
-- **Database:** PostgreSQL
+## 🚀 Key Features
 
-## Project Structure
+* **Role-Based Access Control:** Distinct user flows for "Students" (viewing catalogs, enrolling) and "Instructors" (creating courses, managing content, grading).
+* **Rich-Text Course Authoring:** Instructors can build structured modules and chapters using a **Plate.js / Slate.js** headless rich text editor, which outputs highly structured, database-friendly JSON trees.
+* **Automated Quiz Engine:** Professors can build multiple-choice and short-answer quizzes. The engine handles automated grading, immediate feedback delivery, and securely logs scores to the student's academic profile.
+* **Real-Time Communication:** Enabled by **Django Channels (ASGI)** and **WebSockets**, allowing direct, real-time messaging between students and professors for virtual office hours and instant announcements without page refreshes.
+* **Interactive Schedule Maker:** A dynamic calendar system integrating **React Big Calendar** with Django Date/Time models. Students receive a personalized, aggregated calendar view of all assignment deadlines, lectures, and office hours.
+* **Dynamic Course Catalog:** A unified dashboard optimized via `Promise.all` in React to prevent UI flickering, allowing students to view available courses and current enrollments seamlessly.
 
-```text
-backend/
-  lms_project/      Django project settings and URLs
-  users/            Custom user model, auth endpoints, serializers
-  courses/          Course, chapter, enrollment models and APIs
+## 🛠️ Architecture & Tech Stack
 
-frontend/
-  src/
-    api/            Axios API client
-    components/     Navbar, protected routes, Plate editor, BackButton
-    context/        Auth state
-    pages/          Auth, instructor, and student screens
-    utils/          Form helper utilities
-```
+### Frontend (Client)
+* **Framework:** React.js, React Router DOM (Protected Routes)
+* **State & Lifecycle:** Heavily utilizes React Hooks (`useEffect`, `useState`) for side-effect handling and asynchronous data fetching.
+* **API Communication:** **Axios** with centralized interceptors.
+* **Editor:** Plate.js (Slate.js) headless framework for UI-agnostic JSON-tree data structuring.
+* **UI/Calendar:** React Big Calendar.
 
-## Setup Instructions
+### Backend (Server)
+* **Framework:** Django & Django REST Framework (DRF)
+* **Protocols:** Dual-configured with `wsgi.py` for traditional REST HTTP requests and `asgi.py` for asynchronous WebSocket operations.
+* **Database Management:** Leveraged Django's native ORM and Admin panel for rapid prototyping and secure relational data mapping.
 
+### Authentication & Security
+* **Stateless Auth:** JSON Web Tokens (JWT) implemented via `simplejwt`. 
+* **Dry Routing:** Axios Interceptors automatically attach JWTs (stored securely in memory/localStorage) to the `Authorization` header of every outgoing request, decoupling the frontend from traditional Django session cookies and eliminating CORS friction.
 
-## 1. Database Setup (PostgreSQL)
-Ensure you have PostgreSQL installed and running. Create a new database for the project:
+## 🧠 Architectural Highlights
+* **Horizontal Scalability:** By keeping the backend stateless via JWT authentication and decoupling the React frontend entirely, both layers can scale independently in a cloud environment.
+* **Maintainability:** Centralized API management and modular Django applications (e.g., `users`, `courses`, `messaging`) strictly adhere to the Single Responsibility Principle.
+* **Performance:** Strategic use of React's asynchronous data fetching ensures smooth loading states and minimizes unnecessary DOM re-renders.
 
--- Log into your PostgreSQL instance
-psql -U postgres
+## ⚙️ Local Setup & Installation
 
--- Create the application user
-CREATE ROLE "classavo_user" WITH LOGIN PASSWORD 'your_secure_password';
-
--- Create the database and assign the user as the owner
-CREATE DATABASE "classavo_db" OWNER "classavo_user";
-
-## 2. Configuration
-
-### This project uses environment variables to manage the API connection, ensuring the application remains environment-agnostic.
-
-# Frontend setup
-- Create a `.env` file in the `frontend/` directory.
-- Copy the contents of `frontend/.env.example` into your new `.env` file.
-- Set `REACT_APP_API_URL` to your backend endpoint (e.g., `http://localhost:8000/api`).
-
-# Backend setup
-- Create a `.env` file in the `backend/` directory.
-- Copy the contents of `backend/.env.example` into your new `.env` file.
-- Update database credentials as required.
-
-
-## 3. Backend
-
+### 1. Clone the repository
 ```bash
-cd backend
-python -m venv .venv
-
-# Activate virtual environment
-# Windows:
-.venv\Scripts\activate
-
-# macOS/Linux:
-source .venv/bin/activate
-
-pip install -r requirements.txt
-python manage.py migrate
-python manage.py runserver
-```
-
-The API runs at:
-```
-http://localhost:8000
-```
-
-## 4. Frontend
-
-```bash
-cd frontend
-npm install
-npm start
-```
-
-The React app runs at:
-```
-http://localhost:3000
-```
-
-
-
-## Key Features
-
-### Instructor
-
-- Course Management: Create, publish/unpublish, and manage course lifecycles.
-- Content Creation: Utilize the Plate.js rich-text editor for detailed chapter content.
-- Reporting: View real-time enrollment counts and generate detailed student lists.
-- Form Intelligence: Built-in "Save as Draft" functionality for course/chapter forms, powered by sessionStorage.
-
-### Student
-
-- Catalog Browsing: View and search published courses.
-- Enrollment: Join or unenroll from courses seamlessly.
-- Access Control: Content access is strictly enforced by backend permissions—only enrolled students can read chapter content.
-
-## API Highlights
-
-- Parallel Data Fetching: Frontend uses `Promise.all` to fetch course, chapter, and enrollment data concurrently, reducing load time.
-- Role-Based Access Control (RBAC): All API endpoints are protected using JWT authentication and custom permission classes.
-- Dirty-State Tracking: Custom hooks detect unsaved changes to prevent accidental data loss.
+git clone [https://github.com/Jaypath456/classavo.git](https://github.com/Jaypath456/classavo.git)
+cd classavo
