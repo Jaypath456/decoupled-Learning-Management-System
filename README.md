@@ -1,4 +1,4 @@
-# Classavo: Decoupled Learning Management System
+# Decoupled Learning Management System
 
 A comprehensive, scalable educational platform designed to facilitate course management, interactive content creation, real-time communication, scheduling, and automated assessments for students and professors. 
 
@@ -15,14 +15,14 @@ Built with a **Decoupled Client-Server (REST API)** architecture, this platform 
 
 ## 🛠️ Architecture & Tech Stack
 
-### Frontend (Client)
+### Frontend (`/frontend`)
 * **Framework:** React.js, React Router DOM (Protected Routes)
 * **State & Lifecycle:** Heavily utilizes React Hooks (`useEffect`, `useState`) for side-effect handling and asynchronous data fetching.
 * **API Communication:** **Axios** with centralized interceptors.
 * **Editor:** Plate.js (Slate.js) headless framework for UI-agnostic JSON-tree data structuring.
 * **UI/Calendar:** React Big Calendar.
 
-### Backend (Server)
+### Backend (`/backend`)
 * **Framework:** Django & Django REST Framework (DRF)
 * **Protocols:** Dual-configured with `wsgi.py` for traditional REST HTTP requests and `asgi.py` for asynchronous WebSocket operations.
 * **Database Management:** Leveraged Django's native ORM and Admin panel for rapid prototyping and secure relational data mapping.
@@ -33,12 +33,12 @@ Built with a **Decoupled Client-Server (REST API)** architecture, this platform 
 
 ## 🧠 Architectural Highlights
 * **Horizontal Scalability:** By keeping the backend stateless via JWT authentication and decoupling the React frontend entirely, both layers can scale independently in a cloud environment.
-* **Maintainability:** Centralized API management and modular Django applications (e.g., `users`, `courses`, `messaging`) strictly adhere to the Single Responsibility Principle.
+* **Maintainability:** Centralized API management and modular Django applications (e.g., `users`, `courses`) strictly adhere to the Single Responsibility Principle.
 * **Performance:** Strategic use of React's asynchronous data fetching ensures smooth loading states and minimizes unnecessary DOM re-renders.
 
 ## ⚙️ Local Setup & Installation
 
 ### 1. Clone the repository
 ```bash
-git clone [https://github.com/Jaypath456/classavo.git](https://github.com/Jaypath456/classavo.git)
-cd classavo
+git clone [https://github.com/Jaypath456/decoupled-Learning-Management-System.git](https://github.com/Jaypath456/decoupled-Learning-Management-System.git)
+cd decoupled-Learning-Management-System
