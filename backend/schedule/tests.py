@@ -3,10 +3,10 @@ import unittest
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from courses.models import Course
+from courses.models import Course, Enrollment
 from users.models import User
 
-from .models import Break, Meeting, Section, Term
+from .models import Break, Meeting, SavedSchedule, Section, Term
 from .services import generate_schedules, intervals_overlap
 
 
@@ -598,3 +598,113 @@ class GenerateScheduleAPITests(APITestCase):
         section_data = response.data['schedules'][0][0]
         self.assertIn('meetings', section_data)
         self.assertIn('section_code', section_data)
+
+
+class SavedScheduleTests(APITestCase):
+    """Covers saving a chosen candidate and confirming it into real
+    Enrollments (the same Enrollment table chapters/quizzes/chat already
+    gate on - no second membership concept)."""
+
+    def setUp(self):
+        self.instructor = User.objects.create_user(
+            username='saved_instructor', password='password123', role='instructor'
+        )
+        self.student = User.objects.create_user(
+            username='saved_student', password='password123', role='student'
+        )
+        self.other_student = User.objects.create_user(
+            username='saved_other_student', password='password123', role='student'
+        )
+        self.term = Term.objects.create(
+            name='Summer 2026', start_date='2026-06-01', end_date='2026-08-15'
+        )
+        self.course_a = Course.objects.create(
+            title='Saved Course A', instructor=self.instructor, is_published=True
+        )
+        self.course_b = Course.objects.create(
+            title='Saved Course B', instructor=self.instructor, is_published=True
+        )
+        self.section_a = Section.objects.create(course=self.course_a, term=self.term, section_code='A1')
+        self.section_b = Section.objects.create(course=self.course_b, term=self.term, section_code='B1')
+
+    def test_student_can_save_a_candidate(self):
+        self.client.force_authenticate(user=self.student)
+
+        response = self.client.post(
+            '/api/schedule/saved/',
+            {'term': self.term.id, 'sections': [self.section_a.id, self.section_b.id]},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertIsNone(response.data['confirmed_at'])
+        self.assertEqual(len(response.data['section_details']), 2)
+
+    def test_saving_requires_at_least_one_section(self):
+        self.client.force_authenticate(user=self.student)
+
+        response = self.client.post(
+            '/api/schedule/saved/', {'term': self.term.id, 'sections': []}, format='json'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_student_only_sees_own_saved_schedules(self):
+        SavedSchedule.objects.create(student=self.other_student, term=self.term)
+        saved = SavedSchedule.objects.create(student=self.student, term=self.term)
+        saved.sections.set([self.section_a])
+        self.client.force_authenticate(user=self.student)
+
+        response = self.client.get('/api/schedule/saved/')
+
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['id'], saved.id)
+
+    def test_instructor_cannot_save_a_schedule(self):
+        self.client.force_authenticate(user=self.instructor)
+
+        response = self.client.post(
+            '/api/schedule/saved/',
+            {'term': self.term.id, 'sections': [self.section_a.id]},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_confirm_creates_enrollments_for_every_section_course(self):
+        saved = SavedSchedule.objects.create(student=self.student, term=self.term)
+        saved.sections.set([self.section_a, self.section_b])
+        self.client.force_authenticate(user=self.student)
+
+        response = self.client.post(f'/api/schedule/saved/{saved.id}/confirm/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIsNotNone(response.data['confirmed_at'])
+        self.assertTrue(Enrollment.objects.filter(student=self.student, course=self.course_a).exists())
+        self.assertTrue(Enrollment.objects.filter(student=self.student, course=self.course_b).exists())
+
+    def test_confirming_twice_does_not_duplicate_enrollments(self):
+        saved = SavedSchedule.objects.create(student=self.student, term=self.term)
+        saved.sections.set([self.section_a, self.section_b])
+        self.client.force_authenticate(user=self.student)
+
+        self.client.post(f'/api/schedule/saved/{saved.id}/confirm/')
+        second_response = self.client.post(f'/api/schedule/saved/{saved.id}/confirm/')
+
+        self.assertEqual(second_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            Enrollment.objects.filter(student=self.student, course=self.course_a).count(), 1
+        )
+        self.assertEqual(
+            Enrollment.objects.filter(student=self.student, course=self.course_b).count(), 1
+        )
+
+    def test_student_cannot_confirm_another_students_saved_schedule(self):
+        saved = SavedSchedule.objects.create(student=self.other_student, term=self.term)
+        saved.sections.set([self.section_a])
+        self.client.force_authenticate(user=self.student)
+
+        response = self.client.post(f'/api/schedule/saved/{saved.id}/confirm/')
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertFalse(Enrollment.objects.filter(student=self.student, course=self.course_a).exists())
