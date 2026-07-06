@@ -1,10 +1,17 @@
+import asyncio
+import json
 from unittest.mock import patch
 
+from channels.db import database_sync_to_async
+from channels.testing import WebsocketCommunicator
 from django.core.cache import cache
+from django.test import TransactionTestCase
 from rest_framework import status
 from rest_framework.test import APITestCase
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from courses.models import Course, Enrollment
+from lms_project.asgi import application
 from users.models import User
 
 from . import live_state
@@ -819,7 +826,9 @@ class LiveSessionLifecycleTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['status'], 'active')
-        self.assertEqual(response.data['current_question_index'], 0)
+        # -1: active, but no question revealed yet - the live quiz
+        # consumer's question.advance is what reveals question 0.
+        self.assertEqual(response.data['current_question_index'], -1)
         self.assertIsNotNone(response.data['started_at'])
 
         state = live_state.get_session_state(session.room_code)
@@ -930,3 +939,385 @@ class RoomCodeGenerationTests(APITestCase):
         with patch('quizzes.views.generate_room_code', return_value='STUCK1'):
             with self.assertRaises(RuntimeError):
                 _generate_unique_room_code()
+
+
+class LiveQuizConsumerTests(TransactionTestCase):
+    """Covers the live quiz WebSocket consumer end to end. Uses
+    TransactionTestCase rather than TestCase - the same
+    database_sync_to_async + TestCase-transaction limitation identified
+    in M13/M14 (async DB access runs in a thread that doesn't see
+    TestCase's wrapping transaction)."""
+
+    def setUp(self):
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+
+    @database_sync_to_async
+    def _setup_session(self, status=LiveSession.ACTIVE, current_question_index=-1):
+        self.instructor = User.objects.create_user(
+            username='live_instructor', password='password123', role='instructor'
+        )
+        self.student = User.objects.create_user(
+            username='live_student', password='password123', role='student'
+        )
+        self.outsider = User.objects.create_user(
+            username='live_outsider', password='password123', role='student'
+        )
+        self.course = Course.objects.create(title='Live Course', instructor=self.instructor, is_published=True)
+        Enrollment.objects.create(student=self.student, course=self.course)
+        self.quiz = Quiz.objects.create(course=self.course, title='Live Quiz', is_published=True)
+        self.q1 = Question.objects.create(
+            quiz=self.quiz,
+            question_type=Question.SINGLE_CHOICE,
+            body=choice_body([{'id': 'a', 'text': '3'}, {'id': 'b', 'text': '4'}], ['b']),
+            points=2,
+            order_index=0,
+        )
+        self.q2 = Question.objects.create(
+            quiz=self.quiz,
+            question_type=Question.SHORT_ANSWER,
+            body=short_answer_body('Paris'),
+            points=3,
+            order_index=1,
+        )
+        self.session = LiveSession.objects.create(
+            quiz=self.quiz,
+            host=self.instructor,
+            room_code='LIVE01',
+            status=status,
+            current_question_index=current_question_index,
+        )
+        live_state.set_session_state(self.session)
+
+    @database_sync_to_async
+    def _make_extra_enrolled_student(self, username):
+        user = User.objects.create_user(username=username, password='password123', role='student')
+        Enrollment.objects.create(student=user, course=self.course)
+        return user
+
+    @database_sync_to_async
+    def _access_token(self, user):
+        return str(RefreshToken.for_user(user).access_token)
+
+    async def _connect(self, user, room_code=None):
+        token = await self._access_token(user)
+        code = room_code or self.session.room_code
+        communicator = WebsocketCommunicator(application, f'/ws/live/{code}/', subprotocols=[token])
+        connected, _ = await communicator.connect()
+        return communicator, connected
+
+    @database_sync_to_async
+    def _refresh_session(self):
+        return LiveSession.objects.get(room_code=self.session.room_code)
+
+    @database_sync_to_async
+    def _get_submission(self, student):
+        return Submission.objects.filter(quiz=self.quiz, student=student).first()
+
+    @database_sync_to_async
+    def _submission_count(self, student):
+        return Submission.objects.filter(quiz=self.quiz, student=student).count()
+
+    async def test_host_and_enrolled_student_can_connect(self):
+        await self._setup_session()
+
+        instr_comm, instr_connected = await self._connect(self.instructor)
+        student_comm, student_connected = await self._connect(self.student)
+
+        self.assertTrue(instr_connected)
+        self.assertTrue(student_connected)
+
+        await instr_comm.disconnect()
+        await student_comm.disconnect()
+
+    async def test_non_enrolled_user_is_rejected(self):
+        await self._setup_session()
+
+        _comm, connected = await self._connect(self.outsider)
+
+        self.assertFalse(connected)
+
+    async def test_anonymous_connection_is_rejected(self):
+        await self._setup_session()
+
+        communicator = WebsocketCommunicator(application, f'/ws/live/{self.session.room_code}/')
+        connected, _ = await communicator.connect()
+
+        self.assertFalse(connected)
+
+    async def test_nonexistent_room_is_rejected(self):
+        await self._setup_session()
+
+        _comm, connected = await self._connect(self.instructor, room_code='NOPE99')
+
+        self.assertFalse(connected)
+
+    async def test_fresh_join_receives_lobby_state_with_no_question(self):
+        await self._setup_session(status=LiveSession.LOBBY, current_question_index=-1)
+
+        comm, _ = await self._connect(self.instructor)
+        state = json.loads(await comm.receive_from())
+
+        self.assertEqual(state['type'], 'session.state')
+        self.assertEqual(state['status'], 'lobby')
+        self.assertNotIn('question', state)
+
+        await comm.disconnect()
+
+    async def test_host_advance_reveals_first_question_to_everyone(self):
+        await self._setup_session()
+
+        instr_comm, _ = await self._connect(self.instructor)
+        student_comm, _ = await self._connect(self.student)
+        await instr_comm.receive_from()  # initial session.state
+        await student_comm.receive_from()
+
+        await instr_comm.send_to(text_data=json.dumps({'type': 'question.advance'}))
+
+        instr_revealed = json.loads(await instr_comm.receive_from())
+        student_revealed = json.loads(await student_comm.receive_from())
+
+        self.assertEqual(instr_revealed['type'], 'question.revealed')
+        self.assertEqual(instr_revealed['question']['id'], self.q1.id)
+        self.assertNotIn('correct_option_ids', instr_revealed['question']['body'])
+        self.assertEqual(student_revealed['question']['id'], self.q1.id)
+
+        db_session = await self._refresh_session()
+        self.assertEqual(db_session.current_question_index, 0)
+
+        await instr_comm.disconnect()
+        await student_comm.disconnect()
+
+    async def test_non_host_advance_is_rejected_and_ignored(self):
+        await self._setup_session()
+        comm, _ = await self._connect(self.student)
+        await comm.receive_from()
+
+        await comm.send_to(text_data=json.dumps({'type': 'question.advance'}))
+        response = json.loads(await comm.receive_from())
+
+        self.assertIn('error', response)
+        db_session = await self._refresh_session()
+        self.assertEqual(db_session.current_question_index, -1)
+
+        await comm.disconnect()
+
+    async def test_student_submit_gets_accepted_and_broadcasts_chart(self):
+        await self._setup_session()
+        instr_comm, _ = await self._connect(self.instructor)
+        student_comm, _ = await self._connect(self.student)
+        await instr_comm.receive_from()
+        await student_comm.receive_from()
+
+        await instr_comm.send_to(text_data=json.dumps({'type': 'question.advance'}))
+        await instr_comm.receive_from()
+        await student_comm.receive_from()
+
+        await student_comm.send_to(
+            text_data=json.dumps({'type': 'answer.submit', 'question_id': self.q1.id, 'answer': ['b']})
+        )
+
+        accepted = json.loads(await student_comm.receive_from())
+        self.assertEqual(accepted['type'], 'answer.accepted')
+
+        # The chart broadcast goes to everyone in the room, including
+        # the host - proving the chart is a room-wide broadcast, not a
+        # private acknowledgement.
+        host_chart = json.loads(await instr_comm.receive_from())
+        student_chart = json.loads(await student_comm.receive_from())
+        self.assertEqual(host_chart['type'], 'chart.update')
+        self.assertEqual(host_chart['counts'], {'b': 1})
+        self.assertEqual(student_chart['counts'], {'b': 1})
+
+        submission = await self._get_submission(self.student)
+        self.assertEqual(submission.score, 2)  # q1 is worth 2 points, answered correctly
+
+        await instr_comm.disconnect()
+        await student_comm.disconnect()
+
+    async def test_submitting_to_a_non_open_question_is_rejected(self):
+        await self._setup_session()  # current_question_index=-1, nothing revealed yet
+        comm, _ = await self._connect(self.student)
+        await comm.receive_from()
+
+        await comm.send_to(
+            text_data=json.dumps({'type': 'answer.submit', 'question_id': self.q1.id, 'answer': ['b']})
+        )
+        response = json.loads(await comm.receive_from())
+
+        self.assertIn('error', response)
+        self.assertIsNone(await self._get_submission(self.student))
+
+        await comm.disconnect()
+
+    async def test_duplicate_submit_does_not_double_count_score_or_chart(self):
+        await self._setup_session()
+        instr_comm, _ = await self._connect(self.instructor)
+        student_comm, _ = await self._connect(self.student)
+        await instr_comm.receive_from()
+        await student_comm.receive_from()
+        await instr_comm.send_to(text_data=json.dumps({'type': 'question.advance'}))
+        await instr_comm.receive_from()
+        await student_comm.receive_from()
+
+        # Fire two "submit" events concurrently, simulating a double
+        # click / retried request racing itself.
+        await asyncio.gather(
+            student_comm.send_to(
+                text_data=json.dumps({'type': 'answer.submit', 'question_id': self.q1.id, 'answer': ['b']})
+            ),
+            student_comm.send_to(
+                text_data=json.dumps({'type': 'answer.submit', 'question_id': self.q1.id, 'answer': ['b']})
+            ),
+        )
+
+        # Both requests get an answer.accepted; only the first also
+        # triggers a chart broadcast - which reaches the whole room,
+        # including the submitter's own connection (no special-cased
+        # "local echo" - see broadcast_chart_update).
+        student_messages = [
+            json.loads(await student_comm.receive_from()) for _ in range(3)
+        ]
+        student_types = sorted(m['type'] for m in student_messages)
+        self.assertEqual(student_types, ['answer.accepted', 'answer.accepted', 'chart.update'])
+
+        chart_updates = [m for m in student_messages if m['type'] == 'chart.update']
+        self.assertEqual(chart_updates[0]['counts'], {'b': 1})
+
+        host_chart_update = json.loads(await instr_comm.receive_from())
+        self.assertEqual(host_chart_update['type'], 'chart.update')
+        self.assertEqual(host_chart_update['counts'], {'b': 1})
+
+        # No second chart.update was broadcast for the duplicate.
+        self.assertTrue(await student_comm.receive_nothing(timeout=0.3))
+        self.assertTrue(await instr_comm.receive_nothing(timeout=0.3))
+
+        self.assertEqual(await self._submission_count(self.student), 1)
+        submission = await self._get_submission(self.student)
+        self.assertEqual(submission.score, 2)  # counted exactly once, not twice
+
+        await instr_comm.disconnect()
+        await student_comm.disconnect()
+
+    async def test_chart_counts_match_postgres_submissions_at_question_close(self):
+        await self._setup_session()
+        instr_comm, _ = await self._connect(self.instructor)
+        await instr_comm.receive_from()
+        await instr_comm.send_to(text_data=json.dumps({'type': 'question.advance'}))
+        await instr_comm.receive_from()
+
+        second_student = await self._make_extra_enrolled_student('live_student_2')
+        s1_comm, _ = await self._connect(self.student)
+        s2_comm, _ = await self._connect(second_student)
+        await s1_comm.receive_from()
+        await s2_comm.receive_from()
+
+        await s1_comm.send_to(
+            text_data=json.dumps({'type': 'answer.submit', 'question_id': self.q1.id, 'answer': ['b']})
+        )
+        await s1_comm.receive_from()  # accepted
+        await instr_comm.receive_from()  # chart broadcast
+        await s1_comm.receive_from()
+
+        await s2_comm.send_to(
+            text_data=json.dumps({'type': 'answer.submit', 'question_id': self.q1.id, 'answer': ['a']})
+        )
+        await s2_comm.receive_from()  # accepted
+        final_chart = json.loads(await instr_comm.receive_from())  # chart broadcast
+        await s2_comm.receive_from()
+
+        # "Question close" here = right after both students have
+        # answered; verify the chart's totals equal the number of
+        # Postgres Submission rows carrying an answer for this question.
+        self.assertEqual(final_chart['counts'], {'b': 1, 'a': 1})
+        submissions_with_answer = await self._count_submissions_with_answer(self.q1.id)
+        self.assertEqual(sum(final_chart['counts'].values()), submissions_with_answer)
+
+        await instr_comm.disconnect()
+        await s1_comm.disconnect()
+        await s2_comm.disconnect()
+
+    @database_sync_to_async
+    def _count_submissions_with_answer(self, question_id):
+        count = 0
+        for submission in Submission.objects.filter(quiz=self.quiz):
+            if str(question_id) in submission.answers:
+                count += 1
+        return count
+
+    async def test_two_rooms_do_not_leak_events(self):
+        await self._setup_session()
+
+        second_instructor = await self._make_second_instructor_with_quiz()
+        second_room = self.second_session.room_code
+
+        room_a_comm, _ = await self._connect(self.instructor)
+        room_b_comm, _ = await self._connect(second_instructor, room_code=second_room)
+        await room_a_comm.receive_from()
+        await room_b_comm.receive_from()
+
+        await room_a_comm.send_to(text_data=json.dumps({'type': 'question.advance'}))
+        await room_a_comm.receive_from()
+
+        # Room B must not have received anything from room A's advance.
+        self.assertTrue(await room_b_comm.receive_nothing(timeout=0.3))
+
+        await room_a_comm.disconnect()
+        await room_b_comm.disconnect()
+
+    @database_sync_to_async
+    def _make_second_instructor_with_quiz(self):
+        instructor = User.objects.create_user(
+            username='live_instructor_2', password='password123', role='instructor'
+        )
+        course = Course.objects.create(title='Live Course 2', instructor=instructor, is_published=True)
+        quiz = Quiz.objects.create(course=course, title='Live Quiz 2', is_published=True)
+        Question.objects.create(
+            quiz=quiz,
+            question_type=Question.SHORT_ANSWER,
+            body=short_answer_body('Berlin'),
+            points=1,
+        )
+        self.second_session = LiveSession.objects.create(
+            quiz=quiz, host=instructor, room_code='LIVE02', status=LiveSession.ACTIVE
+        )
+        live_state.set_session_state(self.second_session)
+        return instructor
+
+    async def test_non_host_cannot_end_session(self):
+        await self._setup_session()
+        comm, _ = await self._connect(self.student)
+        await comm.receive_from()
+
+        await comm.send_to(text_data=json.dumps({'type': 'session.end'}))
+        response = json.loads(await comm.receive_from())
+
+        self.assertIn('error', response)
+        db_session = await self._refresh_session()
+        self.assertNotEqual(db_session.status, LiveSession.ENDED)
+
+        await comm.disconnect()
+
+    async def test_host_end_broadcasts_and_persists_final_state_and_clears_redis(self):
+        await self._setup_session()
+        instr_comm, _ = await self._connect(self.instructor)
+        student_comm, _ = await self._connect(self.student)
+        await instr_comm.receive_from()
+        await student_comm.receive_from()
+
+        await instr_comm.send_to(text_data=json.dumps({'type': 'session.end'}))
+
+        instr_ended = json.loads(await instr_comm.receive_from())
+        student_ended = json.loads(await student_comm.receive_from())
+        self.assertEqual(instr_ended['type'], 'session.ended')
+        self.assertEqual(student_ended['type'], 'session.ended')
+
+        db_session = await self._refresh_session()
+        self.assertEqual(db_session.status, LiveSession.ENDED)
+        self.assertIsNotNone(db_session.ended_at)
+        self.assertIsNone(live_state.get_session_state(self.session.room_code))
+
+        await instr_comm.disconnect()
+        await student_comm.disconnect()

@@ -307,7 +307,12 @@ def session_start(request, room_code):
         )
 
     session.status = LiveSession.ACTIVE
-    session.current_question_index = 0
+    # -1 = active, but no question has been revealed yet. The live quiz
+    # consumer's question.advance handler (a later milestone) moves this
+    # to 0 for the *first* reveal - starting a session and revealing its
+    # first question are deliberately separate host actions (REST vs
+    # WebSocket), matching the Mentimeter-style "waiting room" UX.
+    session.current_question_index = -1
     session.started_at = timezone.now()
     session.save(update_fields=['status', 'current_question_index', 'started_at'])
     live_state.set_session_state(session)
