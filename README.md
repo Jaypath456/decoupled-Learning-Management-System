@@ -36,7 +36,43 @@ Built with a **Decoupled Client-Server (REST API)** architecture, this platform 
 * **Maintainability:** Centralized API management and modular Django applications (e.g., `users`, `courses`) strictly adhere to the Single Responsibility Principle.
 * **Performance:** Strategic use of React's asynchronous data fetching ensures smooth loading states and minimizes unnecessary DOM re-renders.
 
-## ⚙️ Local Setup & Installation
+## 🐳 Docker Setup (recommended)
+
+The fastest way to run the full stack (PostgreSQL, Redis, backend, frontend) locally is Docker Compose. No local Python/Node/Postgres installation is required.
+
+### 1. Configure environment variables (optional)
+Every variable has a working default, so this step can be skipped for a quick start. To customize ports or credentials:
+```bash
+cp .env.example .env
+```
+
+### 2. Start the stack
+```bash
+docker compose up --build
+```
+This builds the backend and frontend images, starts PostgreSQL and Redis, waits for both to report healthy, and then starts the backend (which automatically runs `manage.py migrate` on boot) and the frontend dev server.
+
+* Frontend: [http://localhost:3000](http://localhost:3000)
+* Backend API: [http://localhost:8000/api](http://localhost:8000/api)
+* Django admin: [http://localhost:8000/admin](http://localhost:8000/admin)
+
+Redis is started for use by upcoming milestones (caching, live sessions) - the Django app does not use it yet.
+
+### 3. Seed demo data
+In a second terminal, populate the database with demo instructors, students, courses, chapters, and enrollments:
+```bash
+docker compose exec backend python manage.py seed_demo
+```
+This command is idempotent - safe to re-run at any time. It prints login credentials for a demo instructor and demo student account when finished.
+
+### 4. Stopping / resetting
+```bash
+docker compose down        # stop containers, keep data
+docker compose down -v     # stop containers and wipe the database/redis volumes
+```
+PostgreSQL data is stored in a named volume (`postgres_data`), so it survives `docker compose down` and container restarts - only `-v` removes it.
+
+## ⚙️ Local Setup & Installation (without Docker)
 
 ### 1. Clone the repository
 ```bash
