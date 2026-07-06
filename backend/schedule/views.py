@@ -7,8 +7,9 @@ from rest_framework.response import Response
 from courses.models import Course
 from courses.permissions import IsCourseInstructor, IsInstructor, IsStudent
 
-from .models import Break, Section, Term
+from .models import Break, Meeting, Section, Term
 from .serializers import BreakSerializer, SectionSerializer, TermSerializer
+from .services import generate_schedules
 
 
 def _is_section_owner(request, section):
@@ -104,3 +105,76 @@ def break_delete(request, break_id):
     brk = get_object_or_404(Break, id=break_id, student=request.user)
     brk.delete()
     return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# ─── Schedule Generation (common to both roles) ────────────────
+# One endpoint, one pure function (schedule.services.generate_schedules)
+# for both students and instructors - only the source of "blocked
+# intervals" differs by role, exactly per the architecture design: a
+# student's blocks are their Breaks; an instructor's blocks are their own
+# other Meetings, since instructors don't get a Break-like model.
+
+def _section_to_candidate(section):
+    return {
+        'id': section.id,
+        'meetings': [(m.day_of_week, m.start_time, m.end_time) for m in section.meetings.all()],
+    }
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def generate_schedule(request):
+    course_ids = request.data.get('course_ids')
+    term_id = request.data.get('term_id')
+
+    if not term_id:
+        return Response({'error': 'term_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+    if not isinstance(course_ids, list) or not course_ids:
+        return Response({'error': 'course_ids must be a non-empty list'}, status=status.HTTP_400_BAD_REQUEST)
+
+    term = get_object_or_404(Term, id=term_id)
+
+    course_groups = []
+    for course_id in course_ids:
+        sections = (
+            Section.objects.filter(course_id=course_id, term=term)
+            .prefetch_related('meetings')
+        )
+        course_groups.append([_section_to_candidate(s) for s in sections])
+
+    if request.user.role == 'instructor':
+        # Block the instructor's own meetings for their OTHER courses in
+        # this term, so they don't schedule a clash with their existing
+        # teaching. Courses currently being scheduled are excluded so
+        # editing a course's own sections never self-conflicts.
+        own_other_meetings = Meeting.objects.filter(
+            section__course__instructor=request.user,
+            section__term=term,
+        ).exclude(section__course_id__in=course_ids)
+        blocked_intervals = [
+            (m.day_of_week, m.start_time, m.end_time) for m in own_other_meetings
+        ]
+    else:
+        blocked_intervals = [
+            (b.day_of_week, b.start_time, b.end_time)
+            for b in Break.objects.filter(student=request.user)
+        ]
+
+    combinations = generate_schedules(course_groups, blocked_intervals=blocked_intervals)
+
+    # Serialize each unique section exactly once, regardless of how many
+    # combinations reference it, instead of re-serializing per-combination.
+    all_section_ids = {candidate['id'] for group in course_groups for candidate in group}
+    sections_qs = (
+        Section.objects.filter(id__in=all_section_ids)
+        .select_related('course', 'term')
+        .prefetch_related('meetings')
+    )
+    serialized_by_id = {s.id: SectionSerializer(s).data for s in sections_qs}
+
+    schedules = [
+        [serialized_by_id[candidate['id']] for candidate in combination]
+        for combination in combinations
+    ]
+
+    return Response({'count': len(schedules), 'schedules': schedules})

@@ -12,4 +12,6 @@ urlpatterns = [
     # breaks (student-owned)
     path('breaks/', views.break_list_create),
     path('breaks/<int:break_id>/', views.break_delete),
+    # schedule generation (common to both roles)
+    path('schedule/generate/', views.generate_schedule),
 ]
