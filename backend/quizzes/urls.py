@@ -14,4 +14,9 @@ urlpatterns = [
     path('quizzes/<int:quiz_id>/take/', views.quiz_take),
     path('quizzes/<int:quiz_id>/submit/', views.quiz_submit),
     path('quizzes/<int:quiz_id>/my-result/', views.quiz_my_result),
+    # live sessions (room lifecycle)
+    path('quizzes/<int:quiz_id>/sessions/', views.session_create),
+    path('sessions/<str:room_code>/', views.session_detail),
+    path('sessions/<str:room_code>/start/', views.session_start),
+    path('sessions/<str:room_code>/end/', views.session_end),
 ]

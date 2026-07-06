@@ -1,5 +1,6 @@
 from django.db import IntegrityError
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -9,9 +10,11 @@ from courses.models import Course, Enrollment
 from courses.permissions import IsCourseInstructor, IsInstructor, IsStudent
 from lms_project.safe_cache import safe_add, safe_delete
 
+from . import live_state
 from .grading import grade_quiz
-from .models import Question, Quiz, Submission
+from .models import LiveSession, Question, Quiz, Submission, generate_room_code
 from .serializers import (
+    LiveSessionSerializer,
     QuestionSerializer,
     QuizSerializer,
     StudentQuestionSerializer,
@@ -19,6 +22,7 @@ from .serializers import (
 )
 
 SUBMIT_LOCK_TIMEOUT_SECONDS = 60
+ROOM_CODE_GENERATION_ATTEMPTS = 10
 
 
 def _submit_lock_key(quiz_id, user_id):
@@ -242,3 +246,96 @@ def quiz_my_result(request, quiz_id):
         return Response({'error': 'No submission found for this quiz'}, status=status.HTTP_404_NOT_FOUND)
 
     return Response(SubmissionResultSerializer(submission).data)
+
+
+# ─── Live Sessions (room lifecycle) ─────────────────────────────
+# REST here only covers the coarse session lifecycle (create/start/end).
+# The fine-grained per-question state machine (revealing a question,
+# accepting answers, broadcasting results) is WebSocket-driven and lives
+# in a later milestone's consumer - this is deliberately just the
+# lobby/create/start/end scaffolding around it.
+
+def _generate_unique_room_code():
+    for _ in range(ROOM_CODE_GENERATION_ATTEMPTS):
+        code = generate_room_code()
+        if not LiveSession.objects.filter(room_code=code).exists():
+            return code
+    # Astronomically unlikely with a 36^6 keyspace, but fail loudly
+    # rather than silently reusing/colliding a room code.
+    raise RuntimeError('Could not generate a unique room code.')
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsInstructor])
+def session_create(request, quiz_id):
+    quiz = get_object_or_404(Quiz, id=quiz_id)
+
+    if not _is_quiz_owner(request, quiz):
+        return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+
+    session = LiveSession.objects.create(
+        quiz=quiz, host=request.user, room_code=_generate_unique_room_code()
+    )
+    live_state.set_session_state(session)
+    return Response(LiveSessionSerializer(session).data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def session_detail(request, room_code):
+    # Deliberately open to any authenticated user, not just the host or
+    # quiz owner: this is how a student "joins" a live session - by
+    # looking up the room code they were given. The consumer (a later
+    # milestone) is what actually enforces course enrollment before
+    # letting them participate over the WebSocket.
+    session = get_object_or_404(LiveSession, room_code=room_code)
+    return Response(LiveSessionSerializer(session).data)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsInstructor])
+def session_start(request, room_code):
+    session = get_object_or_404(LiveSession, room_code=room_code)
+
+    if session.host_id != request.user.id:
+        return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+
+    if session.status != LiveSession.LOBBY:
+        return Response(
+            {'error': f'Cannot start a session with status "{session.status}".'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    session.status = LiveSession.ACTIVE
+    # -1 = active, but no question has been revealed yet. The live quiz
+    # consumer's question.advance handler (a later milestone) moves this
+    # to 0 for the *first* reveal - starting a session and revealing its
+    # first question are deliberately separate host actions (REST vs
+    # WebSocket), matching the Mentimeter-style "waiting room" UX.
+    session.current_question_index = -1
+    session.started_at = timezone.now()
+    session.save(update_fields=['status', 'current_question_index', 'started_at'])
+    live_state.set_session_state(session)
+
+    return Response(LiveSessionSerializer(session).data)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsInstructor])
+def session_end(request, room_code):
+    session = get_object_or_404(LiveSession, room_code=room_code)
+
+    if session.host_id != request.user.id:
+        return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+
+    if session.status == LiveSession.ENDED:
+        # Idempotent: ending an already-ended session just returns its
+        # current (unchanged) state instead of erroring.
+        return Response(LiveSessionSerializer(session).data)
+
+    session.status = LiveSession.ENDED
+    session.ended_at = timezone.now()
+    session.save(update_fields=['status', 'ended_at'])
+    live_state.clear_session_state(session.room_code)
+
+    return Response(LiveSessionSerializer(session).data)
