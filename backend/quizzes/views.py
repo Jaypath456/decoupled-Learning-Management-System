@@ -101,9 +101,21 @@ def quiz_detail(request, quiz_id):
     return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-# ─── Question Views (instructor-only in this milestone) ────────────
-# Student-facing question access (with correct answers stripped) and
-# submission/grading are added in a later milestone alongside quiz-taking.
+# ─── Question Views (instructor-only) ────────────
+# Student-facing question access (with correct answers stripped) lives in
+# the "Student Quiz-Taking Views" section below.
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, IsInstructor])
+def question_list(request, quiz_id):
+    quiz = get_object_or_404(Quiz, id=quiz_id)
+
+    if not _is_quiz_owner(request, quiz):
+        return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+
+    questions = quiz.questions.order_by('order_index', 'id')
+    return Response(QuestionSerializer(questions, many=True).data)
+
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated, IsInstructor])

@@ -300,3 +300,67 @@
   font-size: 13px;
   margin-bottom: 16px;
 }
+
+/* Quiz taking */
+.quiz-question-card {
+  margin-bottom: 16px;
+}
+
+.quiz-question-heading {
+  font-size: 15px;
+  font-weight: 600;
+  color: #111827;
+  margin-bottom: 10px;
+}
+
+.quiz-question-prompt {
+  margin-bottom: 14px;
+  font-size: 15px;
+  color: #1f2937;
+}
+
+.quiz-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.quiz-option-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  color: #374151;
+  cursor: pointer;
+}
+
+.quiz-short-answer-input {
+  width: 100%;
+  padding: 9px 12px;
+  font-size: 14px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+}
+
+/* Quiz result */
+.quiz-result-card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 32px;
+  text-align: center;
+  margin-bottom: 20px;
+}
+
+.quiz-result-score {
+  font-size: 40px;
+  font-weight: 700;
+  color: #4f46e5;
+  margin: 12px 0 4px;
+}
+
+.quiz-result-percentage {
+  font-size: 16px;
+  color: #6b7280;
+  margin-bottom: 8px;
+}
