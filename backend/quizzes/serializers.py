@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from .models import Question, Quiz
+from .models import Question, Quiz, Submission
 
 
 class QuizSerializer(serializers.ModelSerializer):
@@ -96,3 +96,42 @@ class QuestionSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {'body': 'correct_answer must be a non-empty string for short_answer questions.'}
             )
+
+
+class StudentQuestionSerializer(serializers.ModelSerializer):
+    """Question representation served to students taking a quiz (via
+    quiz_take). Strips every correct-answer key out of `body` - students
+    only ever see the prompt and, for choice questions, the option
+    id/text pairs to choose from. Never expose QuestionSerializer (the
+    instructor-facing full serializer) to a student-facing endpoint.
+    """
+
+    body = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Question
+        fields = ['id', 'question_type', 'body', 'points', 'order_index']
+
+    def get_body(self, obj):
+        body = obj.body or {}
+        sanitized = {'prompt': body.get('prompt')}
+
+        if obj.question_type in (Question.SINGLE_CHOICE, Question.MULTIPLE_CHOICE):
+            # Only id/text - never correct_option_ids.
+            sanitized['options'] = [
+                {'id': option.get('id'), 'text': option.get('text')}
+                for option in body.get('options', [])
+                if isinstance(option, dict)
+            ]
+
+        # short_answer intentionally adds no extra keys - correct_answer
+        # is never sent to the client.
+        return sanitized
+
+
+class SubmissionResultSerializer(serializers.ModelSerializer):
+    quiz = serializers.PrimaryKeyRelatedField(read_only=True)
+
+    class Meta:
+        model = Submission
+        fields = ['id', 'quiz', 'score', 'max_score', 'submitted_at']

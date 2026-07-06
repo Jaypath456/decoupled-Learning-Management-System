@@ -1,14 +1,21 @@
+from django.db import IntegrityError
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from courses.models import Course
-from courses.permissions import IsCourseInstructor, IsInstructor
+from courses.models import Course, Enrollment
+from courses.permissions import IsCourseInstructor, IsInstructor, IsStudent
 
-from .models import Question, Quiz
-from .serializers import QuestionSerializer, QuizSerializer
+from .grading import grade_quiz
+from .models import Question, Quiz, Submission
+from .serializers import (
+    QuestionSerializer,
+    QuizSerializer,
+    StudentQuestionSerializer,
+    SubmissionResultSerializer,
+)
 
 
 def _is_quiz_owner(request, quiz):
@@ -23,6 +30,16 @@ def _is_question_owner(request, question):
     # hop first and then reuse the same IsCourseInstructor check against
     # the parent quiz.
     return IsCourseInstructor().has_object_permission(request, None, question.quiz)
+
+
+def _is_enrolled(user, course):
+    # Mirrors the exact enrollment-membership check already used inline
+    # in courses/views.py::chapter_detail - kept local to this app rather
+    # than importing a permission class that doesn't exist yet on this
+    # branch (courses.permissions.IsEnrolled lands in a separate,
+    # not-yet-merged milestone). Once that merges, this can be replaced
+    # with IsEnrolled().has_object_permission(...).
+    return Enrollment.objects.filter(student=user, course=course).exists()
 
 
 # ─── Quiz Views ─────────────────────────────────────────────
@@ -123,3 +140,80 @@ def question_detail(request, question_id):
 
     question.delete()
     return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# ─── Student Quiz-Taking Views ─────────────────────────────────────
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, IsStudent])
+def quiz_take(request, quiz_id):
+    quiz = get_object_or_404(Quiz, id=quiz_id, is_published=True)
+
+    if not _is_enrolled(request.user, quiz.course):
+        return Response(
+            {'error': 'You must be enrolled in this course to take this quiz'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    questions = quiz.questions.order_by('order_index', 'id')
+    return Response({
+        'quiz': QuizSerializer(quiz).data,
+        'questions': StudentQuestionSerializer(questions, many=True).data,
+    })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsStudent])
+def quiz_submit(request, quiz_id):
+    quiz = get_object_or_404(Quiz, id=quiz_id, is_published=True)
+
+    if not _is_enrolled(request.user, quiz.course):
+        return Response(
+            {'error': 'You must be enrolled in this course to submit this quiz'},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    # Idempotency: unique_together (quiz, student) means a second submit
+    # can never create a second row. Check first so a resubmit (double
+    # click, retried request) is a cheap read instead of grading twice.
+    existing = Submission.objects.filter(quiz=quiz, student=request.user).first()
+    if existing is not None:
+        return Response(SubmissionResultSerializer(existing).data, status=status.HTTP_200_OK)
+
+    answers = request.data.get('answers', {})
+    if not isinstance(answers, dict):
+        return Response({'error': 'answers must be an object mapping question id to answer'},
+                         status=status.HTTP_400_BAD_REQUEST)
+
+    score, max_score = grade_quiz(quiz, answers)
+
+    try:
+        submission = Submission.objects.create(
+            quiz=quiz,
+            student=request.user,
+            answers=answers,
+            score=score,
+            max_score=max_score,
+        )
+    except IntegrityError:
+        # A concurrent request (e.g. a retried network request racing
+        # the original) won the insert between our existence check and
+        # this create() call. The unique_together constraint is the real
+        # guarantee here; this just makes sure the loser of that race
+        # still gets a clean response instead of a 500.
+        submission = Submission.objects.get(quiz=quiz, student=request.user)
+        return Response(SubmissionResultSerializer(submission).data, status=status.HTTP_200_OK)
+
+    return Response(SubmissionResultSerializer(submission).data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated, IsStudent])
+def quiz_my_result(request, quiz_id):
+    quiz = get_object_or_404(Quiz, id=quiz_id)
+
+    submission = Submission.objects.filter(quiz=quiz, student=request.user).first()
+    if submission is None:
+        return Response({'error': 'No submission found for this quiz'}, status=status.HTTP_404_NOT_FOUND)
+
+    return Response(SubmissionResultSerializer(submission).data)
