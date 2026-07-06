@@ -1,3 +1,4 @@
+import datetime
 import json
 
 from channels.db import database_sync_to_async
@@ -9,10 +10,12 @@ from rest_framework.test import APITestCase
 
 from courses.models import Course, Enrollment
 from lms_project.asgi import application
+from schedule.models import Term
 from users.models import User
 
 from .consumers import RATE_LIMIT_MAX_MESSAGES
 from .models import MAX_MESSAGE_LENGTH, Message
+from .tasks import purge_ended_term_chats
 
 
 class MessageHistoryAPITests(APITestCase):
@@ -258,3 +261,106 @@ class CourseChatConsumerTests(TransactionTestCase):
 
         await comm_a.disconnect()
         await comm_b.disconnect()
+
+    @database_sync_to_async
+    def _make_course_with_ended_term(self):
+        instructor = User.objects.create_user(
+            username='ws_chat_ended_instructor', password='password123', role='instructor'
+        )
+        student = User.objects.create_user(
+            username='ws_chat_ended_student', password='password123', role='student'
+        )
+        term = Term.objects.create(
+            name='Ended Term',
+            start_date=datetime.date.today() - datetime.timedelta(days=60),
+            end_date=datetime.date.today() - datetime.timedelta(days=1),
+        )
+        course = Course.objects.create(
+            title='Ended Term Chat Course', instructor=instructor, is_published=True, term=term
+        )
+        Enrollment.objects.create(student=student, course=course)
+        return instructor, student, course
+
+    async def test_write_is_refused_once_term_has_ended(self):
+        _instructor, student, course = await self._make_course_with_ended_term()
+        comm, connected = await self._connect(student, course.id)
+
+        # Connecting to read/observe is still allowed - only the write
+        # itself is refused.
+        self.assertTrue(connected)
+
+        await comm.send_to(text_data=json.dumps({'body': 'too late'}))
+        response = json.loads(await comm.receive_from())
+
+        self.assertIn('error', response)
+        count = await self._message_count(course.id)
+        self.assertEqual(count, 0)
+
+        await comm.disconnect()
+
+    async def test_write_succeeds_for_a_course_with_no_term(self):
+        _instructor, student, _outsider, course = await self._make_course_with_members()
+        comm, _ = await self._connect(student, course.id)
+
+        await comm.send_to(text_data=json.dumps({'body': 'still open'}))
+        response = json.loads(await comm.receive_from())
+
+        self.assertNotIn('error', response)
+        await comm.disconnect()
+
+
+class PurgeEndedTermChatsTaskTests(APITestCase):
+    """Covers the Celery task that implements 'chat resets after the
+    course tenure has ended' - hard-deleting Message rows for courses
+    whose term has ended."""
+
+    def setUp(self):
+        self.instructor = User.objects.create_user(
+            username='purge_instructor', password='password123', role='instructor'
+        )
+
+    def _make_course(self, term=None):
+        return Course.objects.create(
+            title=f'Purge Course {term or "no-term"}',
+            instructor=self.instructor,
+            is_published=True,
+            term=term,
+        )
+
+    def test_purges_only_messages_from_ended_term_courses(self):
+        ended_term = Term.objects.create(
+            name='Ended', start_date=datetime.date.today() - datetime.timedelta(days=60),
+            end_date=datetime.date.today() - datetime.timedelta(days=1),
+        )
+        active_term = Term.objects.create(
+            name='Active', start_date=datetime.date.today(),
+            end_date=datetime.date.today() + datetime.timedelta(days=30),
+        )
+        ended_course = self._make_course(term=ended_term)
+        active_course = self._make_course(term=active_term)
+        no_term_course = self._make_course(term=None)
+
+        Message.objects.create(course=ended_course, sender=self.instructor, body='old message')
+        Message.objects.create(course=active_course, sender=self.instructor, body='current message')
+        Message.objects.create(course=no_term_course, sender=self.instructor, body='untermed message')
+
+        deleted_count = purge_ended_term_chats()
+
+        self.assertEqual(deleted_count, 1)
+        self.assertFalse(Message.objects.filter(course=ended_course).exists())
+        self.assertTrue(Message.objects.filter(course=active_course).exists())
+        self.assertTrue(Message.objects.filter(course=no_term_course).exists())
+
+    def test_purge_is_idempotent(self):
+        ended_term = Term.objects.create(
+            name='Ended Again', start_date=datetime.date.today() - datetime.timedelta(days=60),
+            end_date=datetime.date.today() - datetime.timedelta(days=1),
+        )
+        course = self._make_course(term=ended_term)
+        Message.objects.create(course=course, sender=self.instructor, body='old message')
+
+        first_run = purge_ended_term_chats()
+        second_run = purge_ended_term_chats()
+
+        self.assertEqual(first_run, 1)
+        self.assertEqual(second_run, 0)

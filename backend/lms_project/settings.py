@@ -1,6 +1,7 @@
 from pathlib import Path
 from datetime import timedelta
 import os
+from celery.schedules import crontab
 from dotenv import load_dotenv
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -153,6 +154,10 @@ CELERY_BEAT_SCHEDULE = {
     'heartbeat-every-minute': {
         'task': 'lms_project.tasks.heartbeat',
         'schedule': 60.0,
+    },
+    'purge-ended-term-chats-daily': {
+        'task': 'messaging.tasks.purge_ended_term_chats',
+        'schedule': crontab(hour=3, minute=0),
     },
 }
 

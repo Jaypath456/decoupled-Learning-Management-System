@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import api from '../../api/axios';
+import CourseChat from '../../components/CourseChat';
 import './student.css';
 
 export default function CourseView() {
@@ -105,6 +106,10 @@ export default function CourseView() {
             </div>
           ))}
         </div>
+      )}
+
+      {isEnrolled && (
+        <CourseChat courseId={courseId} chatOpen={course.chat_open} />
       )}
     </div>
   );

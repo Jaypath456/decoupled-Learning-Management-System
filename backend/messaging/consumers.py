@@ -12,6 +12,7 @@ import json
 from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 from django.core.cache import cache
+from django.utils import timezone
 
 from courses.models import Course
 
@@ -75,6 +76,16 @@ class CourseChatConsumer(AsyncWebsocketConsumer):
             await self._send_error('You are sending messages too quickly. Please slow down.')
             return
 
+        # Re-checked per message, not just at connect() - a long-lived
+        # connection could still be open at the exact moment a course's
+        # term ends. Reading history is unaffected; only new writes are
+        # refused (see get_chat_open on CourseSerializer for the REST-
+        # visible signal the frontend uses to disable the composer
+        # proactively, before a send is even attempted).
+        if not await self._is_writable():
+            await self._send_error('This course has ended. Chat is now read-only.')
+            return
+
         message = await self._create_message(user.id, body)
         payload = await self._serialize_message(message)
 
@@ -96,6 +107,13 @@ class CourseChatConsumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def _can_access(self, user, course):
         return can_access_course_chat(user, course)
+
+    @database_sync_to_async
+    def _is_writable(self):
+        course = Course.objects.select_related('term').filter(id=self.course_id).first()
+        if course is None or course.term_id is None:
+            return True
+        return course.term.end_date >= timezone.now().date()
 
     @database_sync_to_async
     def _create_message(self, sender_id, body):
