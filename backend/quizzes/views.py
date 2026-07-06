@@ -7,6 +7,7 @@ from rest_framework.response import Response
 
 from courses.models import Course, Enrollment
 from courses.permissions import IsCourseInstructor, IsInstructor, IsStudent
+from lms_project.safe_cache import safe_add, safe_delete
 
 from .grading import grade_quiz
 from .models import Question, Quiz, Submission
@@ -16,6 +17,12 @@ from .serializers import (
     StudentQuestionSerializer,
     SubmissionResultSerializer,
 )
+
+SUBMIT_LOCK_TIMEOUT_SECONDS = 60
+
+
+def _submit_lock_key(quiz_id, user_id):
+    return f'quiz_submit_lock:{quiz_id}:{user_id}'
 
 
 def _is_quiz_owner(request, quiz):
@@ -173,38 +180,56 @@ def quiz_submit(request, quiz_id):
             status=status.HTTP_403_FORBIDDEN,
         )
 
-    # Idempotency: unique_together (quiz, student) means a second submit
-    # can never create a second row. Check first so a resubmit (double
-    # click, retried request) is a cheap read instead of grading twice.
+    # Idempotency has three layers, cheapest/fastest first:
+    #
+    # 1. Existence check: unique_together (quiz, student) means a second
+    #    submit can never create a second row, so if a Submission
+    #    already exists (an earlier request, possibly seconds/minutes
+    #    ago), this is a cheap read instead of re-grading.
     existing = Submission.objects.filter(quiz=quiz, student=request.user).first()
     if existing is not None:
         return Response(SubmissionResultSerializer(existing).data, status=status.HTTP_200_OK)
 
-    answers = request.data.get('answers', {})
-    if not isinstance(answers, dict):
-        return Response({'error': 'answers must be an object mapping question id to answer'},
-                         status=status.HTTP_400_BAD_REQUEST)
-
-    score, max_score = grade_quiz(quiz, answers)
+    # 2. Redis SETNX-style lock: absorbs a *concurrent* duplicate
+    #    (double-click, retried in-flight request) without ever hitting
+    #    Postgres for the loser. safe_add degrades to "lock acquired"
+    #    (True) if Redis itself is unreachable, so an outage here never
+    #    blocks a legitimate first-time submission - layer 3 below is
+    #    the real guarantee regardless of whether this layer worked.
+    lock_key = _submit_lock_key(quiz.id, request.user.id)
+    if not safe_add(lock_key, True, timeout=SUBMIT_LOCK_TIMEOUT_SECONDS):
+        return Response(
+            {'error': 'A submission for this quiz is already being processed. Please retry.'},
+            status=status.HTTP_409_CONFLICT,
+        )
 
     try:
-        submission = Submission.objects.create(
-            quiz=quiz,
-            student=request.user,
-            answers=answers,
-            score=score,
-            max_score=max_score,
-        )
-    except IntegrityError:
-        # A concurrent request (e.g. a retried network request racing
-        # the original) won the insert between our existence check and
-        # this create() call. The unique_together constraint is the real
-        # guarantee here; this just makes sure the loser of that race
-        # still gets a clean response instead of a 500.
-        submission = Submission.objects.get(quiz=quiz, student=request.user)
-        return Response(SubmissionResultSerializer(submission).data, status=status.HTTP_200_OK)
+        answers = request.data.get('answers', {})
+        if not isinstance(answers, dict):
+            return Response({'error': 'answers must be an object mapping question id to answer'},
+                             status=status.HTTP_400_BAD_REQUEST)
 
-    return Response(SubmissionResultSerializer(submission).data, status=status.HTTP_201_CREATED)
+        score, max_score = grade_quiz(quiz, answers)
+
+        # 3. DB unique_together + IntegrityError catch: the actual
+        #    correctness guarantee, covering the rare case where layer 2
+        #    didn't apply (Redis was down) or two lock keys somehow both
+        #    got created (e.g. after a Redis failover).
+        try:
+            submission = Submission.objects.create(
+                quiz=quiz,
+                student=request.user,
+                answers=answers,
+                score=score,
+                max_score=max_score,
+            )
+        except IntegrityError:
+            submission = Submission.objects.get(quiz=quiz, student=request.user)
+            return Response(SubmissionResultSerializer(submission).data, status=status.HTTP_200_OK)
+
+        return Response(SubmissionResultSerializer(submission).data, status=status.HTTP_201_CREATED)
+    finally:
+        safe_delete(lock_key)
 
 
 @api_view(['GET'])

@@ -3,6 +3,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
+from lms_project.safe_cache import safe_delete, safe_get, safe_set
 from .models import Course, Chapter, Enrollment
 from .serializers import (
     CourseSerializer, 
@@ -13,11 +14,30 @@ from .permissions import IsInstructor, IsStudent
 
 # ─── Course Views ─────────────────────────────────────────────
 
+# Short TTL: this is a read-heavy, low-staleness-tolerance cache (a newly
+# published/unpublished course should show up reasonably quickly), not a
+# long-lived cache. Invalidated explicitly on every write path that can
+# change catalog membership (course_create, course_detail's PUT/DELETE)
+# so the TTL is really just a safety net, not the primary consistency
+# mechanism.
+CATALOG_CACHE_KEY = 'course_catalog:published'
+CATALOG_CACHE_TTL_SECONDS = 60
+
+
+def _invalidate_catalog_cache():
+    safe_delete(CATALOG_CACHE_KEY)
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def course_list(request):
+    cached = safe_get(CATALOG_CACHE_KEY)
+    if cached is not None:
+        return Response(cached)
+
     courses = Course.objects.filter(is_published=True).select_related('instructor')
     serializer = CourseSerializer(courses, many=True)
+    safe_set(CATALOG_CACHE_KEY, serializer.data, CATALOG_CACHE_TTL_SECONDS)
     return Response(serializer.data)
 
 
@@ -35,6 +55,10 @@ def course_create(request):
     serializer = CourseSerializer(data=request.data)
     if serializer.is_valid():
         course = serializer.save(instructor=request.user)
+        # A new course could be created already-published, so the
+        # catalog cache must be invalidated unconditionally rather than
+        # only when is_published=True.
+        _invalidate_catalog_cache()
         return Response(CourseSerializer(course).data, status=status.HTTP_201_CREATED)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -57,10 +81,14 @@ def course_detail(request, course_id):
         serializer = CourseSerializer(course, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
+            # Covers both is_published toggling and title/description
+            # edits, which the cached catalog response also contains.
+            _invalidate_catalog_cache()
             return Response(serializer.data)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     course.delete()
+    _invalidate_catalog_cache()
     return Response(status=status.HTTP_204_NO_CONTENT)
 
 

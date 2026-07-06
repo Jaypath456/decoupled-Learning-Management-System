@@ -1,8 +1,12 @@
+from unittest.mock import patch
+
+from django.core.cache import cache
 from rest_framework import status
 from rest_framework.test import APITestCase
 
 from users.models import User
 from .models import Course, Chapter, Enrollment
+from .views import CATALOG_CACHE_KEY
 
 
 class ChapterAccessTests(APITestCase):
@@ -67,3 +71,92 @@ class ChapterAccessTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['title'], self.private_chapter.title)
+
+
+class CatalogCacheTests(APITestCase):
+    """Covers Redis-backed caching of the course_list endpoint, its
+    invalidation on writes, and graceful degradation if the cache
+    backend is unreachable."""
+
+    def setUp(self):
+        cache.clear()
+        self.student = User.objects.create_user(
+            username='cache_student', password='password123', role='student'
+        )
+        self.instructor = User.objects.create_user(
+            username='cache_instructor', password='password123', role='instructor'
+        )
+        self.client.force_authenticate(user=self.student)
+
+    def tearDown(self):
+        cache.clear()
+
+    def test_second_request_is_served_from_cache(self):
+        Course.objects.create(title='Cached Course', instructor=self.instructor, is_published=True)
+
+        first = self.client.get('/api/courses/')
+        self.assertEqual(len(first.data), 1)
+
+        # A course created after the first request should NOT appear on
+        # a second request if it's truly served from cache.
+        Course.objects.create(title='Not Yet Cached', instructor=self.instructor, is_published=True)
+        second = self.client.get('/api/courses/')
+
+        self.assertEqual(len(second.data), 1)
+        self.assertEqual(second.data, first.data)
+
+    def test_cache_is_invalidated_on_course_create(self):
+        self.client.force_authenticate(user=self.instructor)
+        self.client.get('/api/courses/')  # warm the cache with 0 courses
+
+        self.client.post('/api/courses/create/', {'title': 'Brand New', 'is_published': True}, format='json')
+
+        self.client.force_authenticate(user=self.student)
+        response = self.client.get('/api/courses/')
+        self.assertEqual(len(response.data), 1)
+
+    def test_cache_is_invalidated_on_publish_toggle(self):
+        course = Course.objects.create(title='Draft', instructor=self.instructor, is_published=False)
+        self.client.get('/api/courses/')  # warm the cache with 0 published courses
+
+        self.client.force_authenticate(user=self.instructor)
+        self.client.put(f'/api/courses/{course.id}/', {'is_published': True}, format='json')
+
+        self.client.force_authenticate(user=self.student)
+        response = self.client.get('/api/courses/')
+        self.assertEqual(len(response.data), 1)
+
+    def test_cache_is_invalidated_on_course_delete(self):
+        course = Course.objects.create(title='To Delete', instructor=self.instructor, is_published=True)
+        self.client.get('/api/courses/')  # warm the cache with 1 course
+
+        self.client.force_authenticate(user=self.instructor)
+        self.client.delete(f'/api/courses/{course.id}/')
+
+        self.client.force_authenticate(user=self.student)
+        response = self.client.get('/api/courses/')
+        self.assertEqual(len(response.data), 0)
+
+    def test_catalog_still_works_if_cache_get_is_unavailable(self):
+        Course.objects.create(title='Resilient Course', instructor=self.instructor, is_published=True)
+
+        with patch('django.core.cache.cache.get', side_effect=ConnectionError('redis down')):
+            response = self.client.get('/api/courses/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+
+    def test_catalog_still_works_if_cache_set_is_unavailable(self):
+        Course.objects.create(title='Resilient Course 2', instructor=self.instructor, is_published=True)
+
+        with patch('django.core.cache.cache.set', side_effect=ConnectionError('redis down')):
+            response = self.client.get('/api/courses/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+
+    def test_cache_key_used_matches_expected_constant(self):
+        # Sanity check that the view is actually using the documented
+        # cache key (so ops/debugging docs referencing it stay accurate).
+        self.client.get('/api/courses/')
+        self.assertIsNotNone(cache.get(CATALOG_CACHE_KEY))

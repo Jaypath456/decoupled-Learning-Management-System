@@ -1,3 +1,6 @@
+from unittest.mock import patch
+
+from django.core.cache import cache
 from rest_framework import status
 from rest_framework.test import APITestCase
 
@@ -5,6 +8,7 @@ from courses.models import Course, Enrollment
 from users.models import User
 
 from .models import Question, Quiz, Submission
+from .views import _submit_lock_key
 
 
 def choice_body(options, correct_option_ids, prompt_text='What is 2+2?'):
@@ -564,6 +568,109 @@ class QuizSubmitTests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+class QuizSubmitRedisLockTests(APITestCase):
+    """Covers the Redis SETNX-style fast path layered in front of the
+    DB-level idempotency guarantee (see quiz_submit's docstring/comments
+    for the three-layer design)."""
+
+    def setUp(self):
+        cache.clear()
+        self.instructor = User.objects.create_user(
+            username='lock_instructor', password='password123', role='instructor'
+        )
+        self.student = User.objects.create_user(
+            username='lock_student', password='password123', role='student'
+        )
+        self.course = Course.objects.create(
+            title='Lock Course', instructor=self.instructor, is_published=True
+        )
+        Enrollment.objects.create(student=self.student, course=self.course)
+        self.quiz = Quiz.objects.create(course=self.course, title='Quiz', is_published=True)
+        self.question = Question.objects.create(
+            quiz=self.quiz,
+            question_type=Question.SHORT_ANSWER,
+            body=short_answer_body('Paris'),
+            points=5,
+        )
+        self.client.force_authenticate(user=self.student)
+
+    def tearDown(self):
+        cache.clear()
+
+    def test_concurrent_in_flight_request_gets_409(self):
+        # Simulates a second request arriving while the first is
+        # already mid-flight (lock held, no Submission row yet).
+        lock_key = _submit_lock_key(self.quiz.id, self.student.id)
+        cache.add(lock_key, True, timeout=60)
+
+        response = self.client.post(
+            f'/api/quizzes/{self.quiz.id}/submit/',
+            {'answers': {str(self.question.id): 'Paris'}},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
+        self.assertFalse(Submission.objects.filter(quiz=self.quiz, student=self.student).exists())
+
+    def test_lock_is_released_after_successful_submit(self):
+        self.client.post(
+            f'/api/quizzes/{self.quiz.id}/submit/',
+            {'answers': {str(self.question.id): 'Paris'}},
+            format='json',
+        )
+
+        lock_key = _submit_lock_key(self.quiz.id, self.student.id)
+        self.assertIsNone(cache.get(lock_key))
+
+    def test_lock_is_released_even_when_answers_payload_is_invalid(self):
+        # A 400 mid-request must still release the lock, or every
+        # subsequent attempt for this quiz+student would 409 forever.
+        self.client.post(
+            f'/api/quizzes/{self.quiz.id}/submit/', {'answers': 'not-an-object'}, format='json'
+        )
+
+        lock_key = _submit_lock_key(self.quiz.id, self.student.id)
+        self.assertIsNone(cache.get(lock_key))
+
+        # And a follow-up legitimate submit succeeds normally.
+        response = self.client.post(
+            f'/api/quizzes/{self.quiz.id}/submit/',
+            {'answers': {str(self.question.id): 'Paris'}},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+    def test_submission_still_succeeds_if_redis_is_unavailable(self):
+        with patch('django.core.cache.cache.add', side_effect=ConnectionError('redis down')):
+            response = self.client.post(
+                f'/api/quizzes/{self.quiz.id}/submit/',
+                {'answers': {str(self.question.id): 'Paris'}},
+                format='json',
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['score'], 5)
+        self.assertTrue(Submission.objects.filter(quiz=self.quiz, student=self.student).exists())
+
+    def test_lock_does_not_block_a_different_student(self):
+        other_student = User.objects.create_user(
+            username='lock_other_student', password='password123', role='student'
+        )
+        Enrollment.objects.create(student=other_student, course=self.course)
+
+        lock_key = _submit_lock_key(self.quiz.id, self.student.id)
+        cache.add(lock_key, True, timeout=60)
+
+        self.client.force_authenticate(user=other_student)
+        response = self.client.post(
+            f'/api/quizzes/{self.quiz.id}/submit/',
+            {'answers': {str(self.question.id): 'Paris'}},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 
 
 class QuizMyResultTests(APITestCase):

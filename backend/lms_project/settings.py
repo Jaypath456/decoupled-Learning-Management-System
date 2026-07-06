@@ -110,3 +110,39 @@ SIMPLE_JWT = {
 
 CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOW_CREDENTIALS = True
+
+# ─── Redis (cache + Celery broker) ─────────────────────────────
+# Every feature that touches Redis in this project (caching, the quiz
+# submission idempotency lock) is written to degrade gracefully if Redis
+# is unreachable - see lms_project/safe_cache.py. Redis is an
+# optimization here, never a correctness requirement; the real
+# guarantees are DB constraints (see quizzes/views.py::quiz_submit).
+REDIS_URL = os.getenv('REDIS_URL', 'redis://127.0.0.1:6379/0')
+
+CACHES = {
+    'default': {
+        'BACKEND': 'django_redis.cache.RedisCache',
+        'LOCATION': REDIS_URL,
+        'OPTIONS': {
+            'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+        },
+    }
+}
+
+# ─── Celery ─────────────────────────────────────────────────────
+# No real jobs yet beyond a heartbeat (see lms_project/tasks.py) - this
+# is the scaffolding a later milestone (course chat's tenure-reset purge
+# job) will build on.
+CELERY_BROKER_URL = REDIS_URL
+CELERY_RESULT_BACKEND = REDIS_URL
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = TIME_ZONE
+
+CELERY_BEAT_SCHEDULE = {
+    'heartbeat-every-minute': {
+        'task': 'lms_project.tasks.heartbeat',
+        'schedule': 60.0,
+    },
+}
