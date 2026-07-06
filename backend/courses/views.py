@@ -1,9 +1,11 @@
+from django.db.models import Count
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 from .models import Course, Chapter, Enrollment
+from .pagination import StandardResultsPagination
 from .serializers import (
     CourseSerializer, 
     ChapterSerializer, 
@@ -11,20 +13,53 @@ from .serializers import (
 )
 from .permissions import IsInstructor, IsStudent
 
+
+def _with_course_counts(queryset):
+    """Annotates chapter_count/enrolled_count on a Course queryset with a
+    single GROUP BY query, instead of CourseSerializer issuing two COUNT
+    queries per course (see CourseSerializer.get_chapter_count/
+    get_enrolled_count for the fallback used when a queryset isn't
+    annotated, e.g. nested course objects reached via my_courses)."""
+    return queryset.annotate(
+        chapter_count=Count('chapters', distinct=True),
+        enrolled_count=Count('enrollments', distinct=True),
+    )
+
+
 # ─── Course Views ─────────────────────────────────────────────
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def course_list(request):
-    courses = Course.objects.filter(is_published=True).select_related('instructor')
-    serializer = CourseSerializer(courses, many=True)
-    return Response(serializer.data)
+    # Course.Meta.ordering (-created_at) isn't a unique key - courses
+    # created in the same request/transaction can share a timestamp,
+    # which would make paginated results unstable across page fetches
+    # (Django warns about this: UnorderedObjectListWarning). Adding `id`
+    # as a tiebreaker keeps ordering fully deterministic without touching
+    # the model's default ordering.
+    courses = _with_course_counts(
+        Course.objects.filter(is_published=True)
+        .select_related('instructor')
+        .order_by('-created_at', 'id')
+    )
+
+    paginator = StandardResultsPagination()
+    page = paginator.paginate_queryset(courses, request)
+    serializer = CourseSerializer(page, many=True)
+    return paginator.get_paginated_response(serializer.data)
 
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsInstructor])
 def instructor_courses(request):
-    courses = Course.objects.filter(instructor=request.user).select_related('instructor')
+    # Deliberately not paginated: the Dashboard/CourseList frontend pages
+    # compute aggregate stats (total published, total students) across the
+    # instructor's *entire* course list, and an instructor's own course
+    # count is bounded by what they personally author - unlike the public
+    # catalog, this isn't a platform-wide growth concern.
+    courses = _with_course_counts(
+        Course.objects.filter(instructor=request.user).select_related('instructor')
+    )
     serializer = CourseSerializer(courses, many=True)
     return Response(serializer.data)
 
@@ -35,6 +70,12 @@ def course_create(request):
     serializer = CourseSerializer(data=request.data)
     if serializer.is_valid():
         course = serializer.save(instructor=request.user)
+        # Re-fetch through the annotated queryset so the response uses the
+        # same annotated code path as every other CourseSerializer usage,
+        # instead of relying on the fallback .count() queries for this one
+        # case (a freshly created course has 0 chapters/enrollments either
+        # way, but this keeps the behavior consistent and query-cheap).
+        course = _with_course_counts(Course.objects.filter(pk=course.pk)).get()
         return Response(CourseSerializer(course).data, status=status.HTTP_201_CREATED)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -42,7 +83,7 @@ def course_create(request):
 @api_view(['GET', 'PUT', 'DELETE'])
 @permission_classes([IsAuthenticated])
 def course_detail(request, course_id):
-    course = get_object_or_404(Course, id=course_id)
+    course = get_object_or_404(_with_course_counts(Course.objects.all()), id=course_id)
 
     if request.method == 'GET':
         if not course.is_published and course.instructor != request.user:

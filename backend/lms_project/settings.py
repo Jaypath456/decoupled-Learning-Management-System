@@ -100,6 +100,13 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticated',
     ),
+    # Only applies automatically to generic/class-based views. The
+    # function-based views in courses/views.py that need pagination
+    # (course_list) apply courses.pagination.StandardResultsPagination
+    # explicitly - this default exists so any future generic/class-based
+    # views (e.g. upcoming quizzes app) get sane pagination for free.
+    'DEFAULT_PAGINATION_CLASS': 'courses.pagination.StandardResultsPagination',
+    'PAGE_SIZE': 12,
 }
 
 SIMPLE_JWT = {
