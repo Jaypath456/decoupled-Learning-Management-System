@@ -16,12 +16,14 @@ import CourseForm from './pages/instructor/CourseForm';
 import CourseDetail from './pages/instructor/CourseDetail';
 import ChapterForm from './pages/instructor/ChapterForm';
 import StudentList from './pages/instructor/StudentList';
+import LiveQuizHost from './pages/instructor/LiveQuizHost';
 
 // Student pages
 import Catalog from './pages/student/Catalog';
 import MyCourses from './pages/student/MyCourses';
 import CourseView from './pages/student/CourseView';
 import ChapterReader from './pages/student/ChapterReader';
+import LiveQuiz from './pages/student/LiveQuiz';
 
 import './App.css';
 
@@ -70,6 +72,9 @@ function AppRoutes() {
       <Route path="/instructor/courses/:courseId/students" element={
         <ProtectedRoute role="instructor"><StudentList /></ProtectedRoute>
       } />
+      <Route path="/instructor/quizzes/:quizId/live" element={
+        <ProtectedRoute role="instructor"><LiveQuizHost /></ProtectedRoute>
+      } />
 
       {/* Student routes */}
       <Route path="/student/catalog" element={
@@ -83,6 +88,12 @@ function AppRoutes() {
       } />
       <Route path="/student/chapters/:chapterId" element={
         <ProtectedRoute role="student"><ChapterReader /></ProtectedRoute>
+      } />
+      <Route path="/student/live" element={
+        <ProtectedRoute role="student"><LiveQuiz /></ProtectedRoute>
+      } />
+      <Route path="/student/live/:roomCode" element={
+        <ProtectedRoute role="student"><LiveQuiz /></ProtectedRoute>
       } />
     </Routes>
   );
