@@ -1,0 +1,6 @@
+# Locust run output (CSVs, HTML reports) - regenerated per run, not
+# committed. Keep the directory itself (.gitkeep) so it exists for
+# --csv/--html output paths without needing to be created manually.
+*
+!.gitkeep
+!.gitignore

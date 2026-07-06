@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import IntegrityError
 from django.db.models import Sum
 from django.shortcuts import get_object_or_404
@@ -201,12 +202,16 @@ def quiz_submit(request, quiz_id):
     #    (True) if Redis itself is unreachable, so an outage here never
     #    blocks a legitimate first-time submission - layer 3 below is
     #    the real guarantee regardless of whether this layer worked.
+    #    See settings.LOAD_TEST_DISABLE_REDIS_OPTIMIZATIONS - skipping
+    #    straight to layer 3 is exactly the "before" configuration
+    #    loadtests/ compares against.
     lock_key = _submit_lock_key(quiz.id, request.user.id)
-    if not safe_add(lock_key, True, timeout=SUBMIT_LOCK_TIMEOUT_SECONDS):
-        return Response(
-            {'error': 'A submission for this quiz is already being processed. Please retry.'},
-            status=status.HTTP_409_CONFLICT,
-        )
+    if not settings.LOAD_TEST_DISABLE_REDIS_OPTIMIZATIONS:
+        if not safe_add(lock_key, True, timeout=SUBMIT_LOCK_TIMEOUT_SECONDS):
+            return Response(
+                {'error': 'A submission for this quiz is already being processed. Please retry.'},
+                status=status.HTTP_409_CONFLICT,
+            )
 
     try:
         answers = request.data.get('answers', {})

@@ -165,3 +165,17 @@ CHANNEL_LAYERS = {
         },
     },
 }
+
+# ─── Load testing: before/after toggle ─────────────────────────
+# Flips off the Redis-backed optimizations (catalog caching in
+# courses/views.py, the quiz-submit idempotency fast path in
+# quizzes/views.py) while leaving Redis itself running - this isolates
+# exactly the contribution those optimizations make in the load-test
+# comparison (loadtests/), rather than conflating "Redis optimizations
+# off" with "Redis unreachable" (which is the *degrade gracefully*
+# scenario safe_cache already covers, and a different thing to measure).
+# Never set outside of load testing - defaults to False (optimizations
+# on) everywhere else, including production.
+LOAD_TEST_DISABLE_REDIS_OPTIMIZATIONS = (
+    os.getenv('LOAD_TEST_DISABLE_REDIS_OPTIMIZATIONS', 'False').strip().lower() == 'true'
+)
