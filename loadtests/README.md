@@ -1,10 +1,16 @@
 # Load Testing
 
-REST-tier load tests for the LMS backend, using [Locust](https://locust.io/).
-This directory covers the REST API surface (catalog browsing, course
-enrollment, quiz submission). The WebSocket tier (live quiz sessions) and
-the before/after latency graphs are a separate, later milestone that
-builds on this one.
+Load tests for the LMS backend, covering both tiers:
+- **REST** (`locustfile.py`, [Locust](https://locust.io/)): catalog
+  browsing, course enrollment, quiz submission.
+- **WebSocket** (`ws_load_test.py`, a standalone asyncio + websockets
+  script - Locust doesn't have first-class WebSocket support): hundreds
+  of students connected to the same live quiz session, all receiving a
+  question reveal and all answering within the same instant.
+
+`generate_graphs.py` renders the before/after comparison graphs from
+both tiers' raw output. See [`REPORT.md`](REPORT.md) for a real run's
+results and findings, including one genuinely surprising one.
 
 ## Why this exists
 
@@ -75,6 +81,39 @@ proportionally) for the full ladder. Each run writes
 `<prefix>_stats.csv`, `<prefix>_stats_history.csv`, and
 `<prefix>_failures.csv` - keep these, they're the raw data behind any
 before/after comparison.
+
+## WebSocket tier
+
+Simulates N students already connected to the same live quiz room, all
+answering the moment a question is revealed - the "everyone answers at
+once" spike the REST tier can't reproduce.
+
+```bash
+# Uses the same seeded course/students as the REST tier, plus the
+# "Load Test Quiz" seed_demo also creates.
+python loadtests/ws_load_test.py --host http://localhost:8000 --students 200
+```
+
+To build a ladder (for `generate_graphs.py`'s latency-vs-room-size
+graph), run it at several sizes, appending each run's summary to the
+same file:
+```bash
+for n in 50 100 200 500; do
+  python loadtests/ws_load_test.py --host http://localhost:8000 --students $n \
+    --output-json loadtests/reports/ws_ladder.jsonl
+done
+```
+
+## Generating the graphs
+
+Once you have both tiers' raw output (the REST `before_`/`after_` CSVs
+and the WS `ws_ladder.jsonl`):
+```bash
+python loadtests/generate_graphs.py --user-counts 100 500 1000
+```
+Each graph is skipped (with a warning, not an error) if its inputs
+aren't found - you can generate just the REST graphs, just the WS graph,
+or both, depending on what you've run.
 
 ## Before/after methodology
 
