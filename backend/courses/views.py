@@ -1,3 +1,4 @@
+from django.conf import settings
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -31,13 +32,22 @@ def _invalidate_catalog_cache():
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def course_list(request):
-    cached = safe_get(CATALOG_CACHE_KEY)
-    if cached is not None:
-        return Response(cached)
+    # See settings.LOAD_TEST_DISABLE_REDIS_OPTIMIZATIONS - this branch
+    # exists purely so loadtests/ can measure this endpoint with the
+    # exact same code path minus caching, never for production use.
+    caching_enabled = not settings.LOAD_TEST_DISABLE_REDIS_OPTIMIZATIONS
+
+    if caching_enabled:
+        cached = safe_get(CATALOG_CACHE_KEY)
+        if cached is not None:
+            return Response(cached)
 
     courses = Course.objects.filter(is_published=True).select_related('instructor')
     serializer = CourseSerializer(courses, many=True)
-    safe_set(CATALOG_CACHE_KEY, serializer.data, CATALOG_CACHE_TTL_SECONDS)
+
+    if caching_enabled:
+        safe_set(CATALOG_CACHE_KEY, serializer.data, CATALOG_CACHE_TTL_SECONDS)
+
     return Response(serializer.data)
 
 

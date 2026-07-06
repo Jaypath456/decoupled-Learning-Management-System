@@ -5,7 +5,7 @@ from unittest.mock import patch
 from channels.db import database_sync_to_async
 from channels.testing import WebsocketCommunicator
 from django.core.cache import cache
-from django.test import TransactionTestCase
+from django.test import TransactionTestCase, override_settings
 from rest_framework import status
 from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -680,6 +680,47 @@ class QuizSubmitRedisLockTests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+    @override_settings(LOAD_TEST_DISABLE_REDIS_OPTIMIZATIONS=True)
+    def test_lock_is_skipped_entirely_when_load_test_toggle_disables_it(self):
+        # With the fast path off, a pre-held lock has no effect - the
+        # submission goes straight through the DB-only path (layer 3),
+        # which is exactly the "before" configuration the load tests
+        # compare against.
+        lock_key = _submit_lock_key(self.quiz.id, self.student.id)
+        cache.add(lock_key, True, timeout=60)
+
+        self.client.force_authenticate(user=self.student)
+        response = self.client.post(
+            f'/api/quizzes/{self.quiz.id}/submit/',
+            {'answers': {str(self.question.id): 'Paris'}},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(Submission.objects.filter(quiz=self.quiz, student=self.student).count(), 1)
+
+    @override_settings(LOAD_TEST_DISABLE_REDIS_OPTIMIZATIONS=True)
+    def test_db_constraint_still_prevents_duplicates_with_toggle_disabled(self):
+        # The DB unique_together guarantee (layer 3) must hold
+        # regardless of the toggle - this is the whole point of it
+        # being a three-layer design rather than depending on Redis.
+        self.client.force_authenticate(user=self.student)
+        first = self.client.post(
+            f'/api/quizzes/{self.quiz.id}/submit/',
+            {'answers': {str(self.question.id): 'Paris'}},
+            format='json',
+        )
+        second = self.client.post(
+            f'/api/quizzes/{self.quiz.id}/submit/',
+            {'answers': {str(self.question.id): 'London'}},
+            format='json',
+        )
+
+        self.assertEqual(first.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(second.status_code, status.HTTP_200_OK)
+        self.assertEqual(first.data['score'], second.data['score'])
+        self.assertEqual(Submission.objects.filter(quiz=self.quiz, student=self.student).count(), 1)
 
 
 class QuizMyResultTests(APITestCase):
