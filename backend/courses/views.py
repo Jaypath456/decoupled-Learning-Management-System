@@ -35,7 +35,7 @@ def course_list(request):
     if cached is not None:
         return Response(cached)
 
-    courses = Course.objects.filter(is_published=True).select_related('instructor')
+    courses = Course.objects.filter(is_published=True).select_related('instructor', 'term')
     serializer = CourseSerializer(courses, many=True)
     safe_set(CATALOG_CACHE_KEY, serializer.data, CATALOG_CACHE_TTL_SECONDS)
     return Response(serializer.data)
@@ -44,7 +44,7 @@ def course_list(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsInstructor])
 def instructor_courses(request):
-    courses = Course.objects.filter(instructor=request.user).select_related('instructor')
+    courses = Course.objects.filter(instructor=request.user).select_related('instructor', 'term')
     serializer = CourseSerializer(courses, many=True)
     return Response(serializer.data)
 
@@ -66,7 +66,7 @@ def course_create(request):
 @api_view(['GET', 'PUT', 'DELETE'])
 @permission_classes([IsAuthenticated])
 def course_detail(request, course_id):
-    course = get_object_or_404(Course, id=course_id)
+    course = get_object_or_404(Course.objects.select_related('instructor', 'term'), id=course_id)
 
     if request.method == 'GET':
         if not course.is_published and course.instructor != request.user:
@@ -171,7 +171,9 @@ def enroll(request, course_id):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsStudent])
 def my_courses(request):
-    enrollments = Enrollment.objects.filter(student=request.user).select_related('course', 'course__instructor')
+    enrollments = Enrollment.objects.filter(student=request.user).select_related(
+        'course', 'course__instructor', 'course__term'
+    )
     serializer = EnrollmentSerializer(enrollments, many=True)
     return Response(serializer.data)
 
