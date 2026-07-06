@@ -38,6 +38,7 @@ from django.utils import timezone
 
 from courses.models import Enrollment
 from lms_project.safe_cache import safe_add
+from users.models import User
 
 from . import live_state
 from .grading import is_answer_correct
@@ -188,6 +189,19 @@ class LiveQuizConsumer(AsyncWebsocketConsumer):
             'counts': chart_counts,
         })
 
+        # Redis keeps the sorted set ordered automatically (see
+        # live_state.increment_leaderboard_score, called from inside
+        # _record_answer) - there's no separate "recompute rankings"
+        # step here, just read the already-sorted top N and broadcast
+        # it to the whole room, the same way Alice answering correctly
+        # and moving to 1st place should update everyone's view in
+        # under a second.
+        leaderboard = await self._get_leaderboard()
+        await self.channel_layer.group_send(self.room_group_name, {
+            'type': 'broadcast_leaderboard_update',
+            'rankings': leaderboard,
+        })
+
     # ─── Group broadcast handlers ────────────────────────────────
     # (invoked by Channels for every consumer in the group, including
     # the sender - so the submitter's own chart view updates the same
@@ -210,6 +224,12 @@ class LiveQuizConsumer(AsyncWebsocketConsumer):
     async def broadcast_session_ended(self, event):
         await self.send(text_data=json.dumps({'type': 'session.ended'}))
 
+    async def broadcast_leaderboard_update(self, event):
+        await self.send(text_data=json.dumps({
+            'type': 'leaderboard.update',
+            'rankings': event['rankings'],
+        }))
+
     async def _send_error(self, detail):
         await self.send(text_data=json.dumps({'error': detail}))
 
@@ -223,11 +243,18 @@ class LiveQuizConsumer(AsyncWebsocketConsumer):
             'question_index': state['current_question_index'],
         }
 
-        if state['status'] == LiveSession.ACTIVE and state['current_question_index'] >= 0:
-            question = await self._question_at_index(state['current_question_index'])
-            if question is not None:
-                payload['question'] = StudentQuestionSerializer(question).data
-                payload['chart'] = await self._get_chart_counts(question.id)
+        if state['status'] == LiveSession.ACTIVE:
+            # Standings persist across questions (unlike the chart,
+            # which is per-question), so a late joiner sees them
+            # regardless of whether a question happens to be open right
+            # now.
+            payload['leaderboard'] = await self._get_leaderboard()
+
+            if state['current_question_index'] >= 0:
+                question = await self._question_at_index(state['current_question_index'])
+                if question is not None:
+                    payload['question'] = StudentQuestionSerializer(question).data
+                    payload['chart'] = await self._get_chart_counts(question.id)
 
         await self.send(text_data=json.dumps(payload))
 
@@ -324,11 +351,36 @@ class LiveQuizConsumer(AsyncWebsocketConsumer):
         for bucket in _chart_buckets_for_answer(question, answer):
             live_state.increment_chart_bucket(self.room_code, question_id, bucket)
 
+        # Every accepted answer updates the leaderboard, even a wrong
+        # one worth 0 points - this is what makes a participant appear
+        # on the board (at 0) as soon as they've answered anything,
+        # rather than only once they get something right.
+        live_state.increment_leaderboard_score(self.room_code, user_id, points_earned)
+
         return 'ok'
 
     @database_sync_to_async
     def _get_chart_counts(self, question_id):
         return live_state.get_chart_counts(self.room_code, question_id)
+
+    @database_sync_to_async
+    def _get_leaderboard(self):
+        raw = live_state.get_leaderboard(self.room_code)
+        if not raw:
+            return []
+
+        user_ids = [int(user_id_str) for user_id_str, _score in raw]
+        usernames_by_id = dict(User.objects.filter(id__in=user_ids).values_list('id', 'username'))
+
+        return [
+            {
+                'user_id': int(user_id_str),
+                'username': usernames_by_id.get(int(user_id_str), 'Unknown'),
+                'score': score,
+                'rank': index + 1,
+            }
+            for index, (user_id_str, score) in enumerate(raw)
+        ]
 
     @database_sync_to_async
     def _finalize_session(self):
@@ -338,6 +390,5 @@ class LiveQuizConsumer(AsyncWebsocketConsumer):
         session.ended_at = timezone.now()
         session.save(update_fields=['status', 'ended_at'])
 
-        live_state.clear_session_state(session.room_code)
-        for question_id in session.quiz.questions.values_list('id', flat=True):
-            live_state.clear_chart(self.room_code, question_id)
+        question_ids = list(session.quiz.questions.values_list('id', flat=True))
+        live_state.clear_all_live_state(session.room_code, question_ids)

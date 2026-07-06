@@ -19,4 +19,6 @@ urlpatterns = [
     path('sessions/<str:room_code>/', views.session_detail),
     path('sessions/<str:room_code>/start/', views.session_start),
     path('sessions/<str:room_code>/end/', views.session_end),
+    # leaderboard (persistent, course-scoped)
+    path('courses/<int:course_id>/leaderboard/', views.course_leaderboard),
 ]

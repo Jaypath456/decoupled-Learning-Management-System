@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import PlateEditor from '../../components/PlateEditor';
 import LiveBarChart from '../../components/LiveBarChart';
+import Leaderboard from '../../components/Leaderboard';
 import { ReconnectingSocket } from '../../api/ws';
 import './student.css';
 
@@ -18,6 +19,7 @@ export default function LiveQuiz() {
   const [view, setView] = useState('connecting'); // connecting|waiting|question|chart|ended|error
   const [question, setQuestion] = useState(null);
   const [chartCounts, setChartCounts] = useState({});
+  const [leaderboard, setLeaderboard] = useState([]);
   const [selectedOptions, setSelectedOptions] = useState([]);
   const [shortAnswer, setShortAnswer] = useState('');
   const [error, setError] = useState('');
@@ -57,6 +59,7 @@ export default function LiveQuiz() {
 
     switch (data.type) {
       case 'session.state':
+        if (data.leaderboard) setLeaderboard(data.leaderboard);
         if (data.status === 'ended') {
           setView('ended');
         } else if (data.question) {
@@ -84,6 +87,9 @@ export default function LiveQuiz() {
         break;
       case 'chart.update':
         setChartCounts(data.counts);
+        break;
+      case 'leaderboard.update':
+        setLeaderboard(data.rankings);
         break;
       case 'session.ended':
         setView('ended');
@@ -159,6 +165,11 @@ export default function LiveQuiz() {
           <div className="live-waiting-spinner" />
           <h2>Waiting for the instructor...</h2>
           <p className="text-muted">The quiz will begin shortly.</p>
+          {leaderboard.length > 0 && (
+            <div style={{ width: '100%', maxWidth: 360, textAlign: 'left' }}>
+              <Leaderboard rankings={leaderboard} />
+            </div>
+          )}
         </div>
       )}
 
@@ -204,6 +215,7 @@ export default function LiveQuiz() {
         <div className="form-card">
           <p className="text-muted">Answer submitted! Here's how everyone's answering:</p>
           <LiveBarChart question={question} counts={chartCounts} />
+          <Leaderboard rankings={leaderboard} />
         </div>
       )}
 

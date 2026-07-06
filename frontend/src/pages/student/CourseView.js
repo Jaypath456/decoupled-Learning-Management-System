@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import api from '../../api/axios';
+import Leaderboard from '../../components/Leaderboard';
 import './student.css';
 
 export default function CourseView() {
@@ -10,6 +11,7 @@ export default function CourseView() {
   const [loading, setLoading] = useState(true);
   const [isEnrolled, setIsEnrolled] = useState(false);
   const [enrolling, setEnrolling] = useState(false);
+  const [leaderboard, setLeaderboard] = useState([]);
 
   useEffect(() => {
     const fetchAll = async () => {
@@ -23,6 +25,15 @@ export default function CourseView() {
         setCourse(courseRes.data);
         setChapters(chaptersRes.data);
         setIsEnrolled(enrollRes.data.enrolled);
+
+        // The persistent (non-live) leaderboard - total quiz score
+        // across this course - only enrolled students can see it
+        // (see quizzes/views.py::course_leaderboard), so only fetch it
+        // once we know enrollment status.
+        if (enrollRes.data.enrolled) {
+          const leaderboardRes = await api.get(`/courses/${courseId}/leaderboard/`);
+          setLeaderboard(leaderboardRes.data);
+        }
       } catch (err) {
         console.error("Error loading course:", err);
       } finally {
@@ -105,6 +116,10 @@ export default function CourseView() {
             </div>
           ))}
         </div>
+      )}
+
+      {isEnrolled && (
+        <Leaderboard rankings={leaderboard} title="Quiz Leaderboard" />
       )}
     </div>
   );

@@ -1174,23 +1174,33 @@ class LiveQuizConsumerTests(TransactionTestCase):
         )
 
         # Both requests get an answer.accepted; only the first also
-        # triggers a chart broadcast - which reaches the whole room,
-        # including the submitter's own connection (no special-cased
-        # "local echo" - see broadcast_chart_update).
+        # triggers a chart broadcast AND a leaderboard broadcast - both
+        # reach the whole room, including the submitter's own connection
+        # (no special-cased "local echo" - see broadcast_chart_update/
+        # broadcast_leaderboard_update).
         student_messages = [
-            json.loads(await student_comm.receive_from()) for _ in range(3)
+            json.loads(await student_comm.receive_from()) for _ in range(4)
         ]
         student_types = sorted(m['type'] for m in student_messages)
-        self.assertEqual(student_types, ['answer.accepted', 'answer.accepted', 'chart.update'])
+        self.assertEqual(
+            student_types,
+            ['answer.accepted', 'answer.accepted', 'chart.update', 'leaderboard.update'],
+        )
 
         chart_updates = [m for m in student_messages if m['type'] == 'chart.update']
         self.assertEqual(chart_updates[0]['counts'], {'b': 1})
 
+        leaderboard_updates = [m for m in student_messages if m['type'] == 'leaderboard.update']
+        self.assertEqual(leaderboard_updates[0]['rankings'][0]['score'], 2)
+
         host_chart_update = json.loads(await instr_comm.receive_from())
         self.assertEqual(host_chart_update['type'], 'chart.update')
         self.assertEqual(host_chart_update['counts'], {'b': 1})
+        host_leaderboard_update = json.loads(await instr_comm.receive_from())
+        self.assertEqual(host_leaderboard_update['type'], 'leaderboard.update')
 
-        # No second chart.update was broadcast for the duplicate.
+        # No second chart.update/leaderboard.update was broadcast for
+        # the duplicate.
         self.assertTrue(await student_comm.receive_nothing(timeout=0.3))
         self.assertTrue(await instr_comm.receive_nothing(timeout=0.3))
 
@@ -1219,14 +1229,18 @@ class LiveQuizConsumerTests(TransactionTestCase):
         )
         await s1_comm.receive_from()  # accepted
         await instr_comm.receive_from()  # chart broadcast
-        await s1_comm.receive_from()
+        await instr_comm.receive_from()  # leaderboard broadcast
+        await s1_comm.receive_from()  # chart (own)
+        await s1_comm.receive_from()  # leaderboard (own)
 
         await s2_comm.send_to(
             text_data=json.dumps({'type': 'answer.submit', 'question_id': self.q1.id, 'answer': ['a']})
         )
         await s2_comm.receive_from()  # accepted
         final_chart = json.loads(await instr_comm.receive_from())  # chart broadcast
-        await s2_comm.receive_from()
+        await instr_comm.receive_from()  # leaderboard broadcast
+        await s2_comm.receive_from()  # chart (own)
+        await s2_comm.receive_from()  # leaderboard (own)
 
         # "Question close" here = right after both students have
         # answered; verify the chart's totals equal the number of
@@ -1321,3 +1335,276 @@ class LiveQuizConsumerTests(TransactionTestCase):
 
         await instr_comm.disconnect()
         await student_comm.disconnect()
+
+    async def test_correct_answer_updates_and_broadcasts_leaderboard(self):
+        await self._setup_session()
+        instr_comm, _ = await self._connect(self.instructor)
+        student_comm, _ = await self._connect(self.student)
+        await instr_comm.receive_from()
+        await student_comm.receive_from()
+        await instr_comm.send_to(text_data=json.dumps({'type': 'question.advance'}))
+        await instr_comm.receive_from()
+        await student_comm.receive_from()
+
+        await student_comm.send_to(
+            text_data=json.dumps({'type': 'answer.submit', 'question_id': self.q1.id, 'answer': ['b']})
+        )
+        await student_comm.receive_from()  # answer.accepted
+        await instr_comm.receive_from()  # chart.update
+        await student_comm.receive_from()  # chart.update
+
+        instr_leaderboard = json.loads(await instr_comm.receive_from())
+        student_leaderboard = json.loads(await student_comm.receive_from())
+
+        self.assertEqual(instr_leaderboard['type'], 'leaderboard.update')
+        self.assertEqual(len(instr_leaderboard['rankings']), 1)
+        self.assertEqual(instr_leaderboard['rankings'][0]['username'], 'live_student')
+        self.assertEqual(instr_leaderboard['rankings'][0]['score'], 2)
+        self.assertEqual(instr_leaderboard['rankings'][0]['rank'], 1)
+        self.assertEqual(student_leaderboard['rankings'], instr_leaderboard['rankings'])
+
+        await instr_comm.disconnect()
+        await student_comm.disconnect()
+
+    async def test_wrong_answer_still_appears_on_leaderboard_at_zero(self):
+        await self._setup_session()
+        instr_comm, _ = await self._connect(self.instructor)
+        student_comm, _ = await self._connect(self.student)
+        await instr_comm.receive_from()
+        await student_comm.receive_from()
+        await instr_comm.send_to(text_data=json.dumps({'type': 'question.advance'}))
+        await instr_comm.receive_from()
+        await student_comm.receive_from()
+
+        await student_comm.send_to(
+            text_data=json.dumps({'type': 'answer.submit', 'question_id': self.q1.id, 'answer': ['a']})
+        )
+        await student_comm.receive_from()  # answer.accepted
+        await instr_comm.receive_from()  # chart.update
+        await student_comm.receive_from()  # chart.update
+
+        leaderboard = json.loads(await instr_comm.receive_from())
+
+        self.assertEqual(len(leaderboard['rankings']), 1)
+        self.assertEqual(leaderboard['rankings'][0]['score'], 0)
+
+        await instr_comm.disconnect()
+        await student_comm.disconnect()
+
+    async def test_higher_scorer_moves_to_first_place(self):
+        # Alice (self.student) answers wrong first (0 pts), Bob answers
+        # correctly (2 pts) and should end up ranked above Alice.
+        await self._setup_session()
+        bob = await self._make_extra_enrolled_student('live_student_bob')
+
+        instr_comm, _ = await self._connect(self.instructor)
+        alice_comm, _ = await self._connect(self.student)
+        bob_comm, _ = await self._connect(bob)
+        await instr_comm.receive_from()
+        await alice_comm.receive_from()
+        await bob_comm.receive_from()
+
+        await instr_comm.send_to(text_data=json.dumps({'type': 'question.advance'}))
+        await instr_comm.receive_from()
+        await alice_comm.receive_from()
+        await bob_comm.receive_from()
+
+        await alice_comm.send_to(
+            text_data=json.dumps({'type': 'answer.submit', 'question_id': self.q1.id, 'answer': ['a']})
+        )
+        await alice_comm.receive_from()
+        await instr_comm.receive_from()  # chart
+        await alice_comm.receive_from()  # chart (own broadcast)
+        await bob_comm.receive_from()  # chart
+        first_leaderboard = json.loads(await instr_comm.receive_from())
+        await alice_comm.receive_from()  # leaderboard (own broadcast)
+        await bob_comm.receive_from()  # leaderboard
+
+        self.assertEqual(first_leaderboard['rankings'][0]['username'], 'live_student')
+        self.assertEqual(first_leaderboard['rankings'][0]['score'], 0)
+
+        await bob_comm.send_to(
+            text_data=json.dumps({'type': 'answer.submit', 'question_id': self.q1.id, 'answer': ['b']})
+        )
+        await bob_comm.receive_from()  # accepted
+        await instr_comm.receive_from()  # chart
+        await alice_comm.receive_from()  # chart
+        await bob_comm.receive_from()  # chart (own)
+        final_leaderboard = json.loads(await instr_comm.receive_from())
+
+        self.assertEqual(final_leaderboard['rankings'][0]['username'], 'live_student_bob')
+        self.assertEqual(final_leaderboard['rankings'][0]['score'], 2)
+        self.assertEqual(final_leaderboard['rankings'][0]['rank'], 1)
+
+        await instr_comm.disconnect()
+        await alice_comm.disconnect()
+        await bob_comm.disconnect()
+
+    async def test_late_joiner_sees_existing_leaderboard(self):
+        await self._setup_session()
+        instr_comm, _ = await self._connect(self.instructor)
+        student_comm, _ = await self._connect(self.student)
+        await instr_comm.receive_from()
+        await student_comm.receive_from()
+        await instr_comm.send_to(text_data=json.dumps({'type': 'question.advance'}))
+        await instr_comm.receive_from()
+        await student_comm.receive_from()
+
+        await student_comm.send_to(
+            text_data=json.dumps({'type': 'answer.submit', 'question_id': self.q1.id, 'answer': ['b']})
+        )
+        await student_comm.receive_from()
+        await instr_comm.receive_from()
+        await student_comm.receive_from()
+        await instr_comm.receive_from()  # leaderboard broadcast to host
+        await student_comm.receive_from()  # leaderboard broadcast to student
+
+        late_student = await self._make_extra_enrolled_student('live_student_late')
+        late_comm, connected = await self._connect(late_student)
+        state = json.loads(await late_comm.receive_from())
+
+        self.assertTrue(connected)
+        self.assertIn('leaderboard', state)
+        self.assertEqual(state['leaderboard'][0]['username'], 'live_student')
+        self.assertEqual(state['leaderboard'][0]['score'], 2)
+
+        await instr_comm.disconnect()
+        await student_comm.disconnect()
+        await late_comm.disconnect()
+
+    async def test_leaderboard_is_cleared_on_session_end(self):
+        await self._setup_session()
+        live_state.increment_leaderboard_score(self.session.room_code, self.student.id, 5)
+        instr_comm, _ = await self._connect(self.instructor)
+        await instr_comm.receive_from()
+
+        await instr_comm.send_to(text_data=json.dumps({'type': 'session.end'}))
+        await instr_comm.receive_from()
+
+        self.assertEqual(live_state.get_leaderboard(self.session.room_code), [])
+
+        await instr_comm.disconnect()
+
+
+class LiveStateLeaderboardUnitTests(TransactionTestCase):
+    """Direct unit coverage of the Redis sorted-set helpers, independent
+    of the WebSocket layer above."""
+
+    def setUp(self):
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+
+    def test_increment_and_get_leaderboard_orders_highest_first(self):
+        live_state.increment_leaderboard_score('ROOMX1', 1, 5)
+        live_state.increment_leaderboard_score('ROOMX1', 2, 9)
+        live_state.increment_leaderboard_score('ROOMX1', 3, 2)
+
+        result = live_state.get_leaderboard('ROOMX1')
+
+        self.assertEqual(result, [('2', 9), ('1', 5), ('3', 2)])
+
+    def test_increment_is_cumulative_across_multiple_calls(self):
+        live_state.increment_leaderboard_score('ROOMX2', 1, 3)
+        live_state.increment_leaderboard_score('ROOMX2', 1, 4)
+
+        result = live_state.get_leaderboard('ROOMX2')
+
+        self.assertEqual(result, [('1', 7)])
+
+    def test_get_leaderboard_respects_top_n(self):
+        for user_id in range(15):
+            live_state.increment_leaderboard_score('ROOMX3', user_id, user_id)
+
+        result = live_state.get_leaderboard('ROOMX3', top_n=5)
+
+        self.assertEqual(len(result), 5)
+        self.assertEqual(result[0], ('14', 14))
+
+    def test_clear_leaderboard_removes_all_entries(self):
+        live_state.increment_leaderboard_score('ROOMX4', 1, 5)
+        live_state.clear_leaderboard('ROOMX4')
+
+        self.assertEqual(live_state.get_leaderboard('ROOMX4'), [])
+
+    def test_get_leaderboard_on_empty_room_returns_empty_list(self):
+        self.assertEqual(live_state.get_leaderboard('ROOMEMPTY'), [])
+
+
+class CourseLeaderboardAPITests(APITestCase):
+    """Covers GET /api/courses/<id>/leaderboard/ - the persistent,
+    course-wide counterpart to the live per-session leaderboard."""
+
+    def setUp(self):
+        self.instructor = User.objects.create_user(
+            username='clb_instructor', password='password123', role='instructor'
+        )
+        self.alice = User.objects.create_user(username='clb_alice', password='password123', role='student')
+        self.bob = User.objects.create_user(username='clb_bob', password='password123', role='student')
+        self.outsider = User.objects.create_user(
+            username='clb_outsider', password='password123', role='student'
+        )
+        self.course = Course.objects.create(
+            title='Leaderboard Course', instructor=self.instructor, is_published=True
+        )
+        Enrollment.objects.create(student=self.alice, course=self.course)
+        Enrollment.objects.create(student=self.bob, course=self.course)
+
+        self.quiz_a = Quiz.objects.create(course=self.course, title='Quiz A', is_published=True)
+        self.quiz_b = Quiz.objects.create(course=self.course, title='Quiz B', is_published=True)
+
+        Submission.objects.create(quiz=self.quiz_a, student=self.alice, score=5, max_score=10)
+        Submission.objects.create(quiz=self.quiz_b, student=self.alice, score=3, max_score=10)
+        Submission.objects.create(quiz=self.quiz_a, student=self.bob, score=9, max_score=10)
+
+    def test_enrolled_student_can_view_leaderboard(self):
+        self.client.force_authenticate(user=self.alice)
+
+        response = self.client.get(f'/api/courses/{self.course.id}/leaderboard/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        usernames_in_order = [row['username'] for row in response.data]
+        self.assertEqual(usernames_in_order, ['clb_bob', 'clb_alice'])
+
+    def test_scores_are_summed_across_multiple_quizzes(self):
+        self.client.force_authenticate(user=self.instructor)
+
+        response = self.client.get(f'/api/courses/{self.course.id}/leaderboard/')
+
+        alice_row = next(row for row in response.data if row['username'] == 'clb_alice')
+        self.assertEqual(alice_row['score'], 8)  # 5 + 3 across quiz_a and quiz_b
+
+    def test_instructor_can_view_leaderboard(self):
+        self.client.force_authenticate(user=self.instructor)
+
+        response = self.client.get(f'/api/courses/{self.course.id}/leaderboard/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_outsider_cannot_view_leaderboard(self):
+        self.client.force_authenticate(user=self.outsider)
+
+        response = self.client.get(f'/api/courses/{self.course.id}/leaderboard/')
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_ranks_are_assigned_in_order(self):
+        self.client.force_authenticate(user=self.alice)
+
+        response = self.client.get(f'/api/courses/{self.course.id}/leaderboard/')
+
+        self.assertEqual(response.data[0]['rank'], 1)
+        self.assertEqual(response.data[1]['rank'], 2)
+
+    def test_student_with_no_submissions_does_not_appear(self):
+        third_student = User.objects.create_user(
+            username='clb_no_submissions', password='password123', role='student'
+        )
+        Enrollment.objects.create(student=third_student, course=self.course)
+        self.client.force_authenticate(user=self.alice)
+
+        response = self.client.get(f'/api/courses/{self.course.id}/leaderboard/')
+
+        usernames = [row['username'] for row in response.data]
+        self.assertNotIn('clb_no_submissions', usernames)
