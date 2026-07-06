@@ -88,6 +88,37 @@ class Meeting(models.Model):
             raise ValidationError({'end_time': 'end_time must be after start_time.'})
 
 
+class SavedSchedule(models.Model):
+    """A student's chosen candidate from the schedule generation engine's
+    output - the 'shopping cart' / current schedule from the College
+    Scheduler-style flow. Confirming it (see the confirm endpoint) creates
+    the actual Enrollment rows, which is the same Enrollment table that
+    already gates chapters/quizzes/chat - one membership concept
+    everywhere, not a second one for "scheduled but not yet confirmed".
+    """
+
+    student = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='saved_schedules'
+    )
+    term = models.ForeignKey(
+        Term,
+        on_delete=models.CASCADE,
+        related_name='saved_schedules'
+    )
+    sections = models.ManyToManyField(Section, related_name='saved_schedules')
+    confirmed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        state = 'confirmed' if self.confirmed_at else 'draft'
+        return f'{self.student.username} - {self.term.name} ({state})'
+
+
 class Break(models.Model):
     """A student's personal blocked time window (e.g. "no classes before
     10am on Mondays"). Deliberately student-only: an instructor's

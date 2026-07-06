@@ -22,6 +22,8 @@ import Catalog from './pages/student/Catalog';
 import MyCourses from './pages/student/MyCourses';
 import CourseView from './pages/student/CourseView';
 import ChapterReader from './pages/student/ChapterReader';
+import ScheduleBuilder from './pages/student/ScheduleBuilder';
+import ScheduleView from './pages/student/ScheduleView';
 
 import './App.css';
 
@@ -83,6 +85,12 @@ function AppRoutes() {
       } />
       <Route path="/student/chapters/:chapterId" element={
         <ProtectedRoute role="student"><ChapterReader /></ProtectedRoute>
+      } />
+      <Route path="/student/schedule" element={
+        <ProtectedRoute role="student"><ScheduleView /></ProtectedRoute>
+      } />
+      <Route path="/student/schedule/build" element={
+        <ProtectedRoute role="student"><ScheduleBuilder /></ProtectedRoute>
       } />
     </Routes>
   );

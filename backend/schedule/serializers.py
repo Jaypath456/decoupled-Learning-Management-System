@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from .models import Break, Meeting, Section, Term
+from .models import Break, Meeting, SavedSchedule, Section, Term
 
 
 class TermSerializer(serializers.ModelSerializer):
@@ -67,6 +67,30 @@ class SectionSerializer(serializers.ModelSerializer):
                 Meeting.objects.create(section=instance, **meeting_data)
 
         return instance
+
+
+class SavedScheduleSerializer(serializers.ModelSerializer):
+    student = serializers.PrimaryKeyRelatedField(read_only=True)
+    term = serializers.PrimaryKeyRelatedField(queryset=Term.objects.all())
+    sections = serializers.PrimaryKeyRelatedField(queryset=Section.objects.all(), many=True)
+    section_details = SectionSerializer(source='sections', many=True, read_only=True)
+
+    class Meta:
+        model = SavedSchedule
+        fields = [
+            'id',
+            'student',
+            'term',
+            'sections',
+            'section_details',
+            'confirmed_at',
+            'created_at',
+        ]
+
+    def validate_sections(self, sections):
+        if not sections:
+            raise serializers.ValidationError('sections must be a non-empty list.')
+        return sections
 
 
 class BreakSerializer(serializers.ModelSerializer):

@@ -1,14 +1,15 @@
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from courses.models import Course
+from courses.models import Course, Enrollment
 from courses.permissions import IsCourseInstructor, IsInstructor, IsStudent
 
-from .models import Break, Meeting, Section, Term
-from .serializers import BreakSerializer, SectionSerializer, TermSerializer
+from .models import Break, Meeting, SavedSchedule, Section, Term
+from .serializers import BreakSerializer, SavedScheduleSerializer, SectionSerializer, TermSerializer
 from .services import generate_schedules
 
 
@@ -178,3 +179,46 @@ def generate_schedule(request):
     ]
 
     return Response({'count': len(schedules), 'schedules': schedules})
+
+
+# ─── Saved Schedules (student's chosen candidate) ────────────────
+
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated, IsStudent])
+def saved_schedule_list_create(request):
+    if request.method == 'GET':
+        saved = (
+            SavedSchedule.objects.filter(student=request.user)
+            .select_related('term')
+            .prefetch_related('sections__meetings', 'sections__course')
+        )
+        return Response(SavedScheduleSerializer(saved, many=True).data)
+
+    serializer = SavedScheduleSerializer(data=request.data)
+    if serializer.is_valid():
+        saved = serializer.save(student=request.user)
+        return Response(SavedScheduleSerializer(saved).data, status=status.HTTP_201_CREATED)
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated, IsStudent])
+def saved_schedule_confirm(request, saved_schedule_id):
+    """Turns a chosen candidate into real Enrollments - the same
+    Enrollment table that already gates chapters/quizzes/chat. Uses
+    get_or_create per section's course, so confirming the same
+    SavedSchedule twice (double click, retried request) never creates
+    duplicate Enrollment rows - Enrollment's own unique_together
+    (student, course) is the actual guarantee, matching the idempotency
+    pattern already used for quiz submissions.
+    """
+    saved = get_object_or_404(SavedSchedule, id=saved_schedule_id, student=request.user)
+
+    for section in saved.sections.select_related('course').all():
+        Enrollment.objects.get_or_create(student=request.user, course=section.course)
+
+    if saved.confirmed_at is None:
+        saved.confirmed_at = timezone.now()
+        saved.save(update_fields=['confirmed_at'])
+
+    return Response(SavedScheduleSerializer(saved).data)
