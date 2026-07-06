@@ -73,8 +73,12 @@ export default function CourseDetail() {
         <Link to={`/instructor/courses/${courseId}/students`} className="clickable-link">
           {course.enrolled_count} students enrolled (View all)
         </Link>
-        
+
         <span>{chapters.length} chapters</span>
+
+        <Link to={`/instructor/courses/${courseId}/sections`} className="clickable-link">
+          Manage Sections &amp; Schedule
+        </Link>
       </div>
 
       <div className="section-header">
