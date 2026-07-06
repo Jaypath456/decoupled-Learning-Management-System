@@ -16,6 +16,8 @@ import CourseForm from './pages/instructor/CourseForm';
 import CourseDetail from './pages/instructor/CourseDetail';
 import ChapterForm from './pages/instructor/ChapterForm';
 import StudentList from './pages/instructor/StudentList';
+import SectionList from './pages/instructor/SectionList';
+import SectionForm from './pages/instructor/SectionForm';
 
 // Student pages
 import Catalog from './pages/student/Catalog';
@@ -69,6 +71,15 @@ function AppRoutes() {
       } />
       <Route path="/instructor/courses/:courseId/students" element={
         <ProtectedRoute role="instructor"><StudentList /></ProtectedRoute>
+      } />
+      <Route path="/instructor/courses/:courseId/sections" element={
+        <ProtectedRoute role="instructor"><SectionList /></ProtectedRoute>
+      } />
+      <Route path="/instructor/courses/:courseId/sections/create" element={
+        <ProtectedRoute role="instructor"><SectionForm /></ProtectedRoute>
+      } />
+      <Route path="/instructor/sections/:sectionId/edit" element={
+        <ProtectedRoute role="instructor"><SectionForm /></ProtectedRoute>
       } />
 
       {/* Student routes */}
