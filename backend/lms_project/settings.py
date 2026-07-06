@@ -13,12 +13,18 @@ DEBUG = True
 ALLOWED_HOSTS = ['*']
 
 INSTALLED_APPS = [
+    # Must be listed before django.contrib.staticfiles so that
+    # `manage.py runserver` automatically uses Daphne (ASGI) instead of
+    # Django's WSGI dev server - required for WebSocket support locally.
+    # Production deployments should invoke daphne directly regardless.
+    'daphne',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'channels',
     'rest_framework',
     'rest_framework_simplejwt',
     'corsheaders',
@@ -57,6 +63,7 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'lms_project.wsgi.application'
+ASGI_APPLICATION = 'lms_project.asgi.application'
 
 # DATABASES = {
 #     'default': {
@@ -144,5 +151,17 @@ CELERY_BEAT_SCHEDULE = {
     'heartbeat-every-minute': {
         'task': 'lms_project.tasks.heartbeat',
         'schedule': 60.0,
+    },
+}
+
+# ─── Channels (WebSockets) ──────────────────────────────────────
+# Same Redis instance as the cache/Celery broker - separate logical use,
+# same physical server is fine for this project's scale.
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels_redis.core.RedisChannelLayer',
+        'CONFIG': {
+            'hosts': [REDIS_URL],
+        },
     },
 }
