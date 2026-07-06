@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from .models import Question, Quiz, Submission
+from .models import LiveSession, Question, Quiz, Submission
 
 
 class QuizSerializer(serializers.ModelSerializer):
@@ -135,3 +135,23 @@ class SubmissionResultSerializer(serializers.ModelSerializer):
     class Meta:
         model = Submission
         fields = ['id', 'quiz', 'score', 'max_score', 'submitted_at']
+
+
+class LiveSessionSerializer(serializers.ModelSerializer):
+    quiz = serializers.PrimaryKeyRelatedField(read_only=True)
+    host = serializers.PrimaryKeyRelatedField(read_only=True)
+
+    class Meta:
+        model = LiveSession
+        fields = [
+            'id',
+            'quiz',
+            'host',
+            'room_code',
+            'status',
+            'current_question_index',
+            'started_at',
+            'ended_at',
+            'created_at',
+        ]
+        read_only_fields = ['room_code', 'status', 'current_question_index', 'started_at', 'ended_at']

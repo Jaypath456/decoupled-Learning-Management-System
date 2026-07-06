@@ -7,7 +7,9 @@ from rest_framework.test import APITestCase
 from courses.models import Course, Enrollment
 from users.models import User
 
-from .models import Question, Quiz, Submission
+from . import live_state
+from .models import LiveSession, Question, Quiz, Submission
+from .views import _generate_unique_room_code
 from .views import _submit_lock_key
 
 
@@ -727,3 +729,204 @@ class QuizMyResultTests(APITestCase):
         response = self.client.get(f'/api/quizzes/{self.quiz.id}/my-result/')
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+
+class LiveSessionLifecycleTests(APITestCase):
+    """Covers the REST room lifecycle: create/detail/start/end. The
+    fine-grained per-question state machine is WebSocket-driven and
+    lives in a later milestone - not tested here."""
+
+    def setUp(self):
+        cache.clear()
+        self.owner = User.objects.create_user(
+            username='session_owner', password='password123', role='instructor'
+        )
+        self.other_instructor = User.objects.create_user(
+            username='session_other_instructor', password='password123', role='instructor'
+        )
+        self.student = User.objects.create_user(
+            username='session_student', password='password123', role='student'
+        )
+        self.course = Course.objects.create(
+            title='Session Course', instructor=self.owner, is_published=True
+        )
+        self.quiz = Quiz.objects.create(course=self.course, title='Live Quiz', is_published=True)
+        Question.objects.create(
+            quiz=self.quiz,
+            question_type=Question.SHORT_ANSWER,
+            body={'prompt': [], 'correct_answer': 'Paris'},
+        )
+
+    def tearDown(self):
+        cache.clear()
+
+    def test_owner_can_create_session(self):
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.post(f'/api/quizzes/{self.quiz.id}/sessions/')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['status'], 'lobby')
+        self.assertEqual(len(response.data['room_code']), 6)
+        self.assertTrue(LiveSession.objects.filter(room_code=response.data['room_code']).exists())
+
+    def test_session_create_seeds_redis_state(self):
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.post(f'/api/quizzes/{self.quiz.id}/sessions/')
+
+        state = live_state.get_session_state(response.data['room_code'])
+        self.assertEqual(state['status'], 'lobby')
+        self.assertEqual(state['quiz_id'], self.quiz.id)
+        self.assertEqual(state['host_id'], self.owner.id)
+
+    def test_non_owner_instructor_cannot_create_session(self):
+        self.client.force_authenticate(user=self.other_instructor)
+
+        response = self.client.post(f'/api/quizzes/{self.quiz.id}/sessions/')
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertFalse(LiveSession.objects.exists())
+
+    def test_student_cannot_create_session(self):
+        self.client.force_authenticate(user=self.student)
+
+        response = self.client.post(f'/api/quizzes/{self.quiz.id}/sessions/')
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_any_authenticated_user_can_view_session_by_room_code(self):
+        session = LiveSession.objects.create(quiz=self.quiz, host=self.owner, room_code='ABC123')
+
+        self.client.force_authenticate(user=self.student)
+        response = self.client.get(f'/api/sessions/{session.room_code}/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['room_code'], 'ABC123')
+
+    def test_nonexistent_room_code_returns_404(self):
+        self.client.force_authenticate(user=self.student)
+
+        response = self.client.get('/api/sessions/ZZZZZZ/')
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_host_can_start_session(self):
+        session = LiveSession.objects.create(quiz=self.quiz, host=self.owner, room_code='START1')
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.post(f'/api/sessions/{session.room_code}/start/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status'], 'active')
+        self.assertEqual(response.data['current_question_index'], 0)
+        self.assertIsNotNone(response.data['started_at'])
+
+        state = live_state.get_session_state(session.room_code)
+        self.assertEqual(state['status'], 'active')
+
+    def test_non_host_cannot_start_session(self):
+        session = LiveSession.objects.create(quiz=self.quiz, host=self.owner, room_code='START2')
+        self.client.force_authenticate(user=self.other_instructor)
+
+        response = self.client.post(f'/api/sessions/{session.room_code}/start/')
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        session.refresh_from_db()
+        self.assertEqual(session.status, LiveSession.LOBBY)
+
+    def test_cannot_start_an_already_active_session(self):
+        session = LiveSession.objects.create(
+            quiz=self.quiz, host=self.owner, room_code='START3', status=LiveSession.ACTIVE
+        )
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.post(f'/api/sessions/{session.room_code}/start/')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_cannot_start_an_ended_session(self):
+        session = LiveSession.objects.create(
+            quiz=self.quiz, host=self.owner, room_code='START4', status=LiveSession.ENDED
+        )
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.post(f'/api/sessions/{session.room_code}/start/')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_host_can_end_session_and_redis_state_is_cleared(self):
+        session = LiveSession.objects.create(
+            quiz=self.quiz, host=self.owner, room_code='END001', status=LiveSession.ACTIVE
+        )
+        live_state.set_session_state(session)
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.post(f'/api/sessions/{session.room_code}/end/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status'], 'ended')
+        self.assertIsNotNone(response.data['ended_at'])
+        self.assertIsNone(live_state.get_session_state(session.room_code))
+
+    def test_non_host_cannot_end_session(self):
+        session = LiveSession.objects.create(quiz=self.quiz, host=self.owner, room_code='END002')
+        self.client.force_authenticate(user=self.other_instructor)
+
+        response = self.client.post(f'/api/sessions/{session.room_code}/end/')
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        session.refresh_from_db()
+        self.assertNotEqual(session.status, LiveSession.ENDED)
+
+    def test_ending_an_already_ended_session_is_idempotent(self):
+        session = LiveSession.objects.create(
+            quiz=self.quiz, host=self.owner, room_code='END003', status=LiveSession.ENDED
+        )
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.post(f'/api/sessions/{session.room_code}/end/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status'], 'ended')
+
+    def test_host_can_end_a_session_still_in_lobby(self):
+        session = LiveSession.objects.create(quiz=self.quiz, host=self.owner, room_code='END004')
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.post(f'/api/sessions/{session.room_code}/end/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status'], 'ended')
+
+
+class RoomCodeGenerationTests(APITestCase):
+    """Unit-level coverage of the collision-retry logic, independent of
+    the REST endpoints above."""
+
+    def setUp(self):
+        self.owner = User.objects.create_user(
+            username='roomcode_owner', password='password123', role='instructor'
+        )
+        self.course = Course.objects.create(title='Room Code Course', instructor=self.owner)
+        self.quiz = Quiz.objects.create(course=self.course, title='Quiz')
+
+    def test_generates_a_code_of_the_expected_length(self):
+        code = _generate_unique_room_code()
+        self.assertEqual(len(code), 6)
+
+    def test_retries_on_collision_and_eventually_succeeds(self):
+        existing = LiveSession.objects.create(quiz=self.quiz, host=self.owner, room_code='DUPE01')
+
+        with patch('quizzes.views.generate_room_code', side_effect=['DUPE01', 'DUPE01', 'FRESH1']):
+            code = _generate_unique_room_code()
+
+        self.assertEqual(code, 'FRESH1')
+        self.assertNotEqual(code, existing.room_code)
+
+    def test_raises_after_exhausting_all_attempts(self):
+        LiveSession.objects.create(quiz=self.quiz, host=self.owner, room_code='STUCK1')
+
+        with patch('quizzes.views.generate_room_code', return_value='STUCK1'):
+            with self.assertRaises(RuntimeError):
+                _generate_unique_room_code()
