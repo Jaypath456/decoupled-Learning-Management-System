@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 # runs - this is a safety-net expiry, not a session-length assumption.
 SESSION_STATE_TTL_SECONDS = 60 * 60 * 6
 CHART_TTL_SECONDS = 60 * 60 * 6
+LEADERBOARD_TTL_SECONDS = 60 * 60 * 6
+LEADERBOARD_TOP_N = 10
 
 
 def _state_key(room_code):
@@ -33,6 +35,10 @@ def _state_key(room_code):
 
 def _chart_key(room_code, question_id):
     return f'live_chart:{room_code}:{question_id}'
+
+
+def _leaderboard_key(room_code):
+    return f'live_leaderboard:{room_code}'
 
 
 def set_session_state(session):
@@ -73,10 +79,18 @@ def increment_chart_bucket(room_code, question_id, bucket):
     chart is a visualization, not a correctness record (that's
     Postgres's job, via the Submission row consumers.py writes
     separately in the same request).
+
+    Every operation on this key (increment, read, expire, delete) goes
+    through the same raw redis-py client, never django-redis's cache.*
+    API - that API applies its own KEY_PREFIX/VERSION namespacing, which
+    would silently point cache.expire()/cache.delete() at a different
+    key than the one hincrby() actually wrote to.
     """
     try:
-        _redis_client().hincrby(_chart_key(room_code, question_id), bucket, 1)
-        cache.expire(_chart_key(room_code, question_id), CHART_TTL_SECONDS)
+        key = _chart_key(room_code, question_id)
+        client = _redis_client()
+        client.hincrby(key, bucket, 1)
+        client.expire(key, CHART_TTL_SECONDS)
     except Exception:
         logger.warning(
             'Chart increment failed for room=%s question=%s bucket=%s',
@@ -99,4 +113,65 @@ def get_chart_counts(room_code, question_id):
 
 
 def clear_chart(room_code, question_id):
-    safe_delete(_chart_key(room_code, question_id))
+    try:
+        _redis_client().delete(_chart_key(room_code, question_id))
+    except Exception:
+        logger.warning(
+            'Chart clear failed for room=%s question=%s', room_code, question_id, exc_info=True,
+        )
+
+
+def increment_leaderboard_score(room_code, user_id, points):
+    """ZINCRBY the student's running total for this session by `points`
+    (called for every accepted answer, even worth 0 points, so everyone
+    who has answered at least once appears on the leaderboard - not
+    just students who've gotten something right). Redis keeps the set
+    sorted automatically; there's no separate re-sort step anywhere in
+    this module, which is the entire point of using a sorted set here
+    instead of recomputing rankings from scratch on every update.
+    """
+    try:
+        client = _redis_client()
+        client.zincrby(_leaderboard_key(room_code), points, str(user_id))
+        client.expire(_leaderboard_key(room_code), LEADERBOARD_TTL_SECONDS)
+    except Exception:
+        logger.warning(
+            'Leaderboard increment failed for room=%s user=%s', room_code, user_id, exc_info=True,
+        )
+
+
+def get_leaderboard(room_code, top_n=LEADERBOARD_TOP_N):
+    """Returns [(user_id_str, score), ...] sorted highest-first. Usernames
+    aren't stored in Redis at all - the consumer resolves them from
+    Postgres by id, since a live session's roster is always small enough
+    that this is cheap, and it avoids duplicating user data into Redis.
+    """
+    try:
+        raw = _redis_client().zrevrange(_leaderboard_key(room_code), 0, top_n - 1, withscores=True)
+        return [
+            (uid.decode() if isinstance(uid, bytes) else uid, int(score))
+            for uid, score in raw
+        ]
+    except Exception:
+        logger.warning('Leaderboard read failed for room=%s', room_code, exc_info=True)
+        return []
+
+
+def clear_leaderboard(room_code):
+    try:
+        _redis_client().delete(_leaderboard_key(room_code))
+    except Exception:
+        logger.warning('Leaderboard clear failed for room=%s', room_code, exc_info=True)
+
+
+def clear_all_live_state(room_code, question_ids):
+    """Full teardown for a room: the session-state mirror, the
+    leaderboard, and every question's chart. Used by both the WS-driven
+    session.end (consumers.py) and the REST session_end escape hatch
+    (views.py), so ending a session either way leaves no ephemeral
+    state behind regardless of which path the host used.
+    """
+    clear_session_state(room_code)
+    clear_leaderboard(room_code)
+    for question_id in question_ids:
+        clear_chart(room_code, question_id)

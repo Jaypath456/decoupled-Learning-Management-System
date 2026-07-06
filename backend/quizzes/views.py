@@ -1,4 +1,5 @@
 from django.db import IntegrityError
+from django.db.models import Sum
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
@@ -336,6 +337,46 @@ def session_end(request, room_code):
     session.status = LiveSession.ENDED
     session.ended_at = timezone.now()
     session.save(update_fields=['status', 'ended_at'])
-    live_state.clear_session_state(session.room_code)
+
+    # Full teardown regardless of whether the host ended the session via
+    # this REST escape hatch or the WebSocket session.end event
+    # (consumers.py) - either path must leave no ephemeral state behind.
+    question_ids = Question.objects.filter(quiz_id=session.quiz_id).values_list('id', flat=True)
+    live_state.clear_all_live_state(session.room_code, question_ids)
 
     return Response(LiveSessionSerializer(session).data)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def course_leaderboard(request, course_id):
+    """The persistent counterpart to the live leaderboard: total score
+    across every quiz Submission in this course, for every student who
+    has submitted anything. Computed via annotation (not the Redis
+    sorted set, which is per-session and ephemeral) since this spans
+    every quiz/session a course has ever had, indefinitely.
+    """
+    course = get_object_or_404(Course, id=course_id)
+
+    is_owner = course.instructor_id == request.user.id
+    if not is_owner and not Enrollment.objects.filter(student=request.user, course=course).exists():
+        return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+
+    rows = (
+        Submission.objects.filter(quiz__course=course)
+        .values('student_id', 'student__username')
+        .annotate(total_score=Sum('score'))
+        .order_by('-total_score', 'student__username')
+    )
+
+    rankings = [
+        {
+            'user_id': row['student_id'],
+            'username': row['student__username'],
+            'score': row['total_score'],
+            'rank': index + 1,
+        }
+        for index, row in enumerate(rows)
+    ]
+
+    return Response(rankings)

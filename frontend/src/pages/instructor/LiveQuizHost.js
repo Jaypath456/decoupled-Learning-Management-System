@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom';
 import api from '../../api/axios';
 import { ReconnectingSocket } from '../../api/ws';
 import LiveBarChart from '../../components/LiveBarChart';
+import Leaderboard from '../../components/Leaderboard';
 import './instructor.css';
 
 export default function LiveQuizHost() {
@@ -12,6 +13,7 @@ export default function LiveQuizHost() {
   const [question, setQuestion] = useState(null);
   const [questionIndex, setQuestionIndex] = useState(-1);
   const [chartCounts, setChartCounts] = useState({});
+  const [leaderboard, setLeaderboard] = useState([]);
   const [ended, setEnded] = useState(false);
   const [error, setError] = useState('');
   const [creating, setCreating] = useState(false);
@@ -40,6 +42,7 @@ export default function LiveQuizHost() {
     switch (data.type) {
       case 'session.state':
         setQuestionIndex(data.question_index);
+        if (data.leaderboard) setLeaderboard(data.leaderboard);
         if (data.question) {
           setQuestion(data.question);
           setChartCounts(data.chart || {});
@@ -53,6 +56,9 @@ export default function LiveQuizHost() {
         break;
       case 'chart.update':
         setChartCounts(data.counts);
+        break;
+      case 'leaderboard.update':
+        setLeaderboard(data.rankings);
         break;
       case 'session.ended':
         setEnded(true);
@@ -160,6 +166,10 @@ export default function LiveQuizHost() {
           </div>
         </div>
       )}
+
+      <div className="form-card">
+        <Leaderboard rankings={leaderboard} />
+      </div>
 
       <div className="form-actions" style={{ marginTop: 20 }}>
         <button className="btn-secondary btn-danger" onClick={handleEnd}>
