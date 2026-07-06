@@ -10,4 +10,8 @@ urlpatterns = [
     # questions
     path('quizzes/<int:quiz_id>/questions/create/', views.question_create),
     path('questions/<int:question_id>/', views.question_detail),
+    # student quiz-taking
+    path('quizzes/<int:quiz_id>/take/', views.quiz_take),
+    path('quizzes/<int:quiz_id>/submit/', views.quiz_submit),
+    path('quizzes/<int:quiz_id>/my-result/', views.quiz_my_result),
 ]
