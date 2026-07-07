@@ -11,7 +11,7 @@ from .serializers import (
     ChapterSerializer, 
     EnrollmentSerializer
 )
-from .permissions import IsInstructor, IsStudent
+from .permissions import IsInstructor, IsStudent, IsCourseInstructor, IsEnrolled
 
 # ─── Course Views ─────────────────────────────────────────────
 
@@ -78,13 +78,15 @@ def course_create(request):
 def course_detail(request, course_id):
     course = get_object_or_404(Course, id=course_id)
 
+    is_owner = IsCourseInstructor().has_object_permission(request, None, course)
+
     if request.method == 'GET':
-        if not course.is_published and course.instructor != request.user:
+        if not course.is_published and not is_owner:
             return Response({'error': 'This course is not available'}, status=status.HTTP_403_FORBIDDEN)
         return Response(CourseSerializer(course).data)
 
     # Permission check for modifying/deleting
-    if course.instructor != request.user:
+    if not is_owner:
         return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
 
     if request.method == 'PUT':
@@ -125,7 +127,7 @@ def chapter_list(request, course_id):
 def chapter_create(request, course_id):
     course = get_object_or_404(Course, id=course_id)
 
-    if course.instructor != request.user:
+    if not IsCourseInstructor().has_object_permission(request, None, course):
         return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
 
     serializer = ChapterSerializer(data=request.data)
@@ -139,18 +141,19 @@ def chapter_create(request, course_id):
 @permission_classes([IsAuthenticated])
 def chapter_detail(request, chapter_id):
     chapter = get_object_or_404(Chapter, id=chapter_id)
+    is_owner = IsCourseInstructor().has_object_permission(request, None, chapter)
 
     if request.method == 'GET':
-        if chapter.course.instructor == request.user:
+        if is_owner:
             return Response(ChapterSerializer(chapter).data)
 
-        is_enrolled = Enrollment.objects.filter(student=request.user, course=chapter.course).exists()
+        is_enrolled = IsEnrolled().has_object_permission(request, None, chapter)
         if chapter.course.is_published and chapter.visibility == 'public' and is_enrolled:
             return Response(ChapterSerializer(chapter).data)
 
         return Response({'error': 'This chapter is not available'}, status=status.HTTP_403_FORBIDDEN)
 
-    if chapter.course.instructor != request.user:
+    if not is_owner:
         return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
 
     if request.method == 'PUT':
@@ -165,18 +168,6 @@ def chapter_detail(request, chapter_id):
 
 
 # ─── Enrollment Views ─────────────────────────────────────────────
-
-@api_view(['POST'])
-@permission_classes([IsAuthenticated, IsStudent])
-def enroll(request, course_id):
-    course = get_object_or_404(Course, id=course_id, is_published=True)
-
-    if Enrollment.objects.filter(student=request.user, course=course).exists():
-        return Response({'error': 'Already enrolled in this course'}, status=status.HTTP_400_BAD_REQUEST)
-
-    enrollment = Enrollment.objects.create(student=request.user, course=course)
-    return Response(EnrollmentSerializer(enrollment).data, status=status.HTTP_201_CREATED)
-
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsStudent])
@@ -193,31 +184,34 @@ def enrollment_status(request, course_id):
     return Response({'enrolled': enrolled})
 
 @api_view(['POST', 'DELETE'])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsAuthenticated, IsStudent])
 def manage_enrollment(request, course_id):
-    course = get_object_or_404(Course, id=course_id)
-    
     if request.method == 'POST':
+        # Only published courses can be joined - draft courses are not
+        # available to students even if they know the course id.
+        course = get_object_or_404(Course, id=course_id, is_published=True)
         Enrollment.objects.get_or_create(student=request.user, course=course)
-        return Response({"message": "Enrolled"}, status=201)
-        
-    if request.method == 'DELETE':
-        Enrollment.objects.filter(student=request.user, course=course).delete()
-        return Response({"message": "Unenrolled"}, status=204)
-    
+        return Response({"message": "Enrolled"}, status=status.HTTP_201_CREATED)
+
+    # DELETE: allow unenrolling even if the course was unpublished after
+    # the student joined.
+    course = get_object_or_404(Course, id=course_id)
+    Enrollment.objects.filter(student=request.user, course=course).delete()
+    return Response({"message": "Unenrolled"}, status=status.HTTP_204_NO_CONTENT)
+
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsInstructor])
 def course_enrolled_students(request, course_id):
     course = get_object_or_404(Course, id=course_id, instructor=request.user)
     # Get all enrollments for this course
     enrollments = Enrollment.objects.filter(course=course).select_related('student')
-    
+
     # Extract student data
     data = [{
         "id": e.student.id,
         "name": e.student.username,
         "email": e.student.email,
-        "phone": getattr(e.student, 'phone_number', 'N/A') 
     } for e in enrollments]
-    
+
     return Response(data)
