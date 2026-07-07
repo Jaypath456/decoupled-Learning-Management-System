@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import api from '../../api/axios';
 import Leaderboard from '../../components/Leaderboard';
+import CourseChat from '../../components/CourseChat';
 import './student.css';
 
 export default function CourseView() {
@@ -152,6 +153,10 @@ export default function CourseView() {
 
       {isEnrolled && (
         <Leaderboard rankings={leaderboard} title="Quiz Leaderboard" />
+      )}
+
+      {isEnrolled && (
+        <CourseChat courseId={courseId} chatOpen={course.chat_open} />
       )}
     </div>
   );

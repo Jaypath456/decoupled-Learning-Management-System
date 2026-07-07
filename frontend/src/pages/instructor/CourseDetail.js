@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import api from '../../api/axios';
+import CourseChat from '../../components/CourseChat';
 import './instructor.css';
 
 export default function CourseDetail() {
@@ -171,6 +172,8 @@ export default function CourseDetail() {
           ))}
         </div>
       )}
+
+      <CourseChat courseId={courseId} chatOpen={course.chat_open} />
     </div>
   );
 }

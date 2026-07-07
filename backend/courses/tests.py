@@ -1,4 +1,5 @@
 import io
+import datetime
 from unittest.mock import patch
 
 from django.core.cache import cache
@@ -10,6 +11,7 @@ from rest_framework.test import APITestCase
 from users.models import User
 from .models import Course, Chapter, Enrollment
 from .views import CATALOG_CACHE_KEY
+from schedule.models import Term
 
 
 class ChapterAccessTests(APITestCase):
@@ -620,3 +622,54 @@ class CourseCatalogQueryTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['chapter_count'], course.chapters.count())
         self.assertEqual(response.data['enrolled_count'], course.enrollments.count())
+
+
+class CourseChatOpenFieldTests(APITestCase):
+    """Covers CourseSerializer.chat_open, the REST-visible signal the
+    chat frontend (M15) uses to disable the composer proactively, and
+    which messaging/consumers.py's write-lock mirrors server-side."""
+
+    def setUp(self):
+        cache.clear()
+        self.instructor = User.objects.create_user(
+            username='chatopen_instructor', password='password123', role='instructor'
+        )
+        self.client.force_authenticate(user=self.instructor)
+
+    def tearDown(self):
+        cache.clear()
+
+    def test_course_with_no_term_is_always_open(self):
+        course = Course.objects.create(title='No Term Course', instructor=self.instructor, is_published=True)
+
+        response = self.client.get(f'/api/courses/{course.id}/')
+
+        self.assertTrue(response.data['chat_open'])
+
+    def test_course_with_future_term_end_date_is_open(self):
+        term = Term.objects.create(
+            name='Future Term',
+            start_date=datetime.date.today(),
+            end_date=datetime.date.today() + datetime.timedelta(days=30),
+        )
+        course = Course.objects.create(
+            title='Future Term Course', instructor=self.instructor, is_published=True, term=term
+        )
+
+        response = self.client.get(f'/api/courses/{course.id}/')
+
+        self.assertTrue(response.data['chat_open'])
+
+    def test_course_with_past_term_end_date_is_closed(self):
+        term = Term.objects.create(
+            name='Past Term',
+            start_date=datetime.date.today() - datetime.timedelta(days=60),
+            end_date=datetime.date.today() - datetime.timedelta(days=1),
+        )
+        course = Course.objects.create(
+            title='Past Term Course', instructor=self.instructor, is_published=True, term=term
+        )
+
+        response = self.client.get(f'/api/courses/{course.id}/')
+
+        self.assertFalse(response.data['chat_open'])

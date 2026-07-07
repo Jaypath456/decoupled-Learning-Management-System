@@ -80,7 +80,7 @@ def course_list(request):
     # the model's default ordering.
     courses = _with_course_counts(
         Course.objects.filter(is_published=True)
-        .select_related('instructor')
+        .select_related('instructor', 'term')
         .order_by('-created_at', 'id')
     )
 
@@ -104,7 +104,7 @@ def instructor_courses(request):
     # count is bounded by what they personally author - unlike the public
     # catalog, this isn't a platform-wide growth concern.
     courses = _with_course_counts(
-        Course.objects.filter(instructor=request.user).select_related('instructor')
+        Course.objects.filter(instructor=request.user).select_related('instructor', 'term')
     )
     serializer = CourseSerializer(courses, many=True)
     return Response(serializer.data)
@@ -133,7 +133,9 @@ def course_create(request):
 @api_view(['GET', 'PUT', 'DELETE'])
 @permission_classes([IsAuthenticated])
 def course_detail(request, course_id):
-    course = get_object_or_404(_with_course_counts(Course.objects.all()), id=course_id)
+    course = get_object_or_404(
+        _with_course_counts(Course.objects.select_related('instructor', 'term')), id=course_id
+    )
 
     is_owner = IsCourseInstructor().has_object_permission(request, None, course)
 
@@ -229,7 +231,9 @@ def chapter_detail(request, chapter_id):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsStudent])
 def my_courses(request):
-    enrollments = Enrollment.objects.filter(student=request.user).select_related('course', 'course__instructor')
+    enrollments = Enrollment.objects.filter(student=request.user).select_related(
+        'course', 'course__instructor', 'course__term'
+    )
     serializer = EnrollmentSerializer(enrollments, many=True)
     return Response(serializer.data)
 
