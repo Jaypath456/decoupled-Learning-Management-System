@@ -78,3 +78,35 @@ PostgreSQL data is stored in a named volume (`postgres_data`), so it survives `d
 ```bash
 git clone [https://github.com/Jaypath456/decoupled-Learning-Management-System.git](https://github.com/Jaypath456/decoupled-Learning-Management-System.git)
 cd decoupled-Learning-Management-System
+```
+
+### 2. Backend setup
+```bash
+cd backend
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+Copy the example environment file and fill in your own values:
+```bash
+cp .env.example .env
+```
+
+At minimum you must set:
+* `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT` — your local PostgreSQL credentials.
+* `SECRET_KEY` — a unique Django secret. Generate one with:
+  ```bash
+  python -c "import secrets; print(secrets.token_urlsafe(50))"
+  ```
+* `DEBUG` — `True` for local development, `False` in any deployed environment.
+* `ALLOWED_HOSTS` — comma-separated hostnames allowed to serve the API (defaults to `localhost,127.0.0.1`).
+* `CORS_ALLOWED_ORIGINS` — comma-separated frontend origins allowed to call the API (defaults to `http://localhost:3000`).
+
+The app will refuse to start if `SECRET_KEY` is missing, so this step is not optional.
+
+Then apply migrations and run the server:
+```bash
+python manage.py migrate
+python manage.py runserver
+```
