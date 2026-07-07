@@ -54,3 +54,28 @@ class JWTAuthMiddleware(BaseMiddleware):
 
 def JWTAuthMiddlewareStack(inner):
     return JWTAuthMiddleware(inner)
+
+
+def negotiated_subprotocol(scope):
+    """The subprotocol every consumer must pass to accept(subprotocol=...).
+
+    The client always offers exactly one WS subprotocol - the JWT itself
+    (see the module docstring above and frontend/src/api/ws.js) - never
+    to actually negotiate a protocol, just to get the token to this
+    middleware before accept(). But per RFC 6455 a server handshake
+    response is expected to echo back one of the offered subprotocols
+    whenever the client's request included any; several browsers
+    (Chrome included) treat a response that omits the header entirely -
+    which is what a bare accept() sends - as a failed handshake, not a
+    successful connection with no subprotocol selected. This showed up
+    as every real-browser WebSocket connection being torn down
+    immediately after Daphne's access log already reported CONNECT
+    (the server-side handshake genuinely succeeded; the browser then
+    aborted on its own before the JS WebSocket ever reached OPEN), while
+    both the test client (WebsocketCommunicator) and plain Python
+    `websockets` clients used in load testing are lenient about this
+    and never surfaced it. Consumers must use this instead of bare
+    accept().
+    """
+    subprotocols = scope.get('subprotocols') or []
+    return subprotocols[0] if subprotocols else None

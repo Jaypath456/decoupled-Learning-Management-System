@@ -11,6 +11,8 @@ import json
 
 from channels.generic.websocket import AsyncWebsocketConsumer
 
+from .ws_auth import negotiated_subprotocol
+
 
 class EchoConsumer(AsyncWebsocketConsumer):
     async def connect(self):
@@ -22,7 +24,7 @@ class EchoConsumer(AsyncWebsocketConsumer):
             # 4999 range is reserved for this) meaning "unauthenticated".
             await self.close(code=4001)
             return
-        await self.accept()
+        await self.accept(subprotocol=negotiated_subprotocol(self.scope))
 
     async def receive(self, text_data=None, bytes_data=None):
         user = self.scope['user']

@@ -162,6 +162,28 @@ class CourseChatConsumerTests(TransactionTestCase):
 
         self.assertFalse(connected)
 
+    async def test_accept_echoes_the_token_subprotocol(self):
+        # Regression test: real browsers (Chrome confirmed) fail a
+        # WebSocket handshake outright if the server's response omits
+        # Sec-WebSocket-Protocol after the client offered one - a bare
+        # accept() does exactly that. WebsocketCommunicator doesn't
+        # enforce this the way a real browser does, so this has to be
+        # checked explicitly via connect()'s returned subprotocol rather
+        # than relying on `connected` being True. See
+        # lms_project/ws_auth.py::negotiated_subprotocol.
+        instructor, _student, _outsider, course = await self._make_course_with_members()
+        token = await self._access_token(instructor)
+
+        communicator = WebsocketCommunicator(
+            application, f'/ws/chat/{course.id}/', subprotocols=[token]
+        )
+        connected, subprotocol = await communicator.connect()
+
+        self.assertTrue(connected)
+        self.assertEqual(subprotocol, token)
+
+        await communicator.disconnect()
+
     async def test_anonymous_connection_is_rejected(self):
         _instructor, _student, _outsider, course = await self._make_course_with_members()
 

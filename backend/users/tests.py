@@ -70,8 +70,17 @@ class WebSocketJWTAuthTests(TransactionTestCase):
         token = await self._access_token_for(user)
 
         communicator = WebsocketCommunicator(application, '/ws/echo/', subprotocols=[token])
-        connected, _ = await communicator.connect()
+        connected, subprotocol = await communicator.connect()
         self.assertTrue(connected)
+        # Regression test: a bare accept() (no subprotocol echoed back)
+        # passes Channels' own WebsocketCommunicator - it isn't strict
+        # about this like real browsers are - but real browsers (Chrome
+        # confirmed) treat a handshake response that omits
+        # Sec-WebSocket-Protocol as failed when the client offered one,
+        # even though the connection looks "CONNECTed" in Daphne's
+        # access log right up until the browser tears it down. See
+        # lms_project/ws_auth.py::negotiated_subprotocol.
+        self.assertEqual(subprotocol, token)
 
         await communicator.send_to(text_data='hello world')
         response = await communicator.receive_from()

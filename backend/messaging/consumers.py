@@ -15,6 +15,7 @@ from django.core.cache import cache
 from django.utils import timezone
 
 from courses.models import Course
+from lms_project.ws_auth import negotiated_subprotocol
 
 from .models import MAX_MESSAGE_LENGTH, Message
 from .permissions import can_access_course_chat
@@ -47,7 +48,7 @@ class CourseChatConsumer(AsyncWebsocketConsumer):
         # regardless of how many rooms are active concurrently.
         self.room_group_name = f'chat_{self.course_id}'
         await self.channel_layer.group_add(self.room_group_name, self.channel_name)
-        await self.accept()
+        await self.accept(subprotocol=negotiated_subprotocol(self.scope))
 
     async def disconnect(self, close_code):
         if hasattr(self, 'room_group_name'):

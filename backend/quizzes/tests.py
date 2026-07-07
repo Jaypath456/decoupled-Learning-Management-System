@@ -1099,6 +1099,28 @@ class LiveQuizConsumerTests(TransactionTestCase):
         await instr_comm.disconnect()
         await student_comm.disconnect()
 
+    async def test_accept_echoes_the_token_subprotocol(self):
+        # Regression test: real browsers (Chrome confirmed) fail a
+        # WebSocket handshake outright if the server's response omits
+        # Sec-WebSocket-Protocol after the client offered one - a bare
+        # accept() does exactly that. WebsocketCommunicator doesn't
+        # enforce this the way a real browser does, so this has to be
+        # checked explicitly via connect()'s returned subprotocol rather
+        # than relying on `connected` being True. See
+        # lms_project/ws_auth.py::negotiated_subprotocol.
+        await self._setup_session()
+        token = await self._access_token(self.student)
+
+        communicator = WebsocketCommunicator(
+            application, f'/ws/live/{self.session.room_code}/', subprotocols=[token]
+        )
+        connected, subprotocol = await communicator.connect()
+
+        self.assertTrue(connected)
+        self.assertEqual(subprotocol, token)
+
+        await communicator.disconnect()
+
     async def test_non_enrolled_user_is_rejected(self):
         await self._setup_session()
 

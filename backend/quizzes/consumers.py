@@ -38,6 +38,7 @@ from django.utils import timezone
 
 from courses.models import Enrollment
 from lms_project.safe_cache import safe_add
+from lms_project.ws_auth import negotiated_subprotocol
 from users.models import User
 
 from . import live_state
@@ -94,7 +95,7 @@ class LiveQuizConsumer(AsyncWebsocketConsumer):
         # cross traffic, regardless of how many are running at once.
         self.room_group_name = f'live_{self.room_code}'
         await self.channel_layer.group_add(self.room_group_name, self.channel_name)
-        await self.accept()
+        await self.accept(subprotocol=negotiated_subprotocol(self.scope))
 
         # Every connect (fresh join or reconnect) gets the current
         # state pushed immediately - this is what makes a late joiner
