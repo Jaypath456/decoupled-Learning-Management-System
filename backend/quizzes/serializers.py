@@ -41,6 +41,7 @@ class QuestionSerializer(serializers.ModelSerializer):
             'body',
             'points',
             'order_index',
+            'time_limit_seconds',
         ]
 
     def validate(self, attrs):
@@ -110,7 +111,7 @@ class StudentQuestionSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Question
-        fields = ['id', 'question_type', 'body', 'points', 'order_index']
+        fields = ['id', 'question_type', 'body', 'points', 'order_index', 'time_limit_seconds']
 
     def get_body(self, obj):
         body = obj.body or {}

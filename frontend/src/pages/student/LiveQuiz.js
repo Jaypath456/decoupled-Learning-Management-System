@@ -1,25 +1,32 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import PlateEditor from '../../components/PlateEditor';
-import LiveBarChart from '../../components/LiveBarChart';
-import Leaderboard from '../../components/Leaderboard';
 import { ReconnectingSocket } from '../../api/ws';
 import './student.css';
+
+const DEFAULT_TIME_LIMIT_SECONDS = 20;
 
 // The whole point of this page: the client never decides what to show
 // - it renders whatever the server's last event said. 'view' is set
 // directly from server events (session.state / question.revealed /
 // answer.accepted / session.ended), never inferred client-side.
+//
+// Deliberately never renders the live chart or leaderboard - those are
+// instructor-only (see LiveQuizHost.js). A student's own correctness
+// feedback comes from answer.accepted's private is_correct field, not
+// from anything broadcast to the room (quizzes/consumers.py).
 export default function LiveQuiz() {
   const { roomCode: roomCodeParam } = useParams();
   const navigate = useNavigate();
 
   const [roomCodeInput, setRoomCodeInput] = useState('');
   const [roomCode, setRoomCode] = useState(roomCodeParam || null);
-  const [view, setView] = useState('connecting'); // connecting|waiting|question|chart|ended|error
+  const [view, setView] = useState('connecting'); // connecting|waiting|question|result|ended|error
   const [question, setQuestion] = useState(null);
-  const [chartCounts, setChartCounts] = useState({});
-  const [leaderboard, setLeaderboard] = useState([]);
+  const [timeLimitSeconds, setTimeLimitSeconds] = useState(DEFAULT_TIME_LIMIT_SECONDS);
+  const [revealedAt, setRevealedAt] = useState(null);
+  const [remainingSeconds, setRemainingSeconds] = useState(DEFAULT_TIME_LIMIT_SECONDS);
+  const [lastAnswerCorrect, setLastAnswerCorrect] = useState(null);
   const [selectedOptions, setSelectedOptions] = useState([]);
   const [shortAnswer, setShortAnswer] = useState('');
   const [error, setError] = useState('');
@@ -51,6 +58,26 @@ export default function LiveQuiz() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomCode]);
 
+  // Ticks the countdown while a question is open. Recomputes from
+  // revealed_at (a server timestamp, see quizzes/consumers.py) rather
+  // than counting down from a client-side "started now" moment - that's
+  // what lets a late joiner or a reconnecting client land on the
+  // correct remaining time instead of always getting a fresh full-length
+  // timer.
+  useEffect(() => {
+    if (view !== 'question' || !revealedAt) return undefined;
+
+    const revealedMs = new Date(revealedAt).getTime();
+    const tick = () => {
+      const elapsedSeconds = (Date.now() - revealedMs) / 1000;
+      setRemainingSeconds(Math.max(0, timeLimitSeconds - elapsedSeconds));
+    };
+
+    tick();
+    const interval = setInterval(tick, 200);
+    return () => clearInterval(interval);
+  }, [view, revealedAt, timeLimitSeconds]);
+
   const handleServerEvent = (data) => {
     if (data.error) {
       setError(data.error);
@@ -59,12 +86,12 @@ export default function LiveQuiz() {
 
     switch (data.type) {
       case 'session.state':
-        if (data.leaderboard) setLeaderboard(data.leaderboard);
         if (data.status === 'ended') {
           setView('ended');
         } else if (data.question) {
           setQuestion(data.question);
-          setChartCounts(data.chart || {});
+          setTimeLimitSeconds(data.question.time_limit_seconds || DEFAULT_TIME_LIMIT_SECONDS);
+          setRevealedAt(data.revealed_at);
           // A reconnecting client can't tell from this event alone
           // whether it already answered - the server doesn't track
           // that in this snapshot, so default to the question view;
@@ -78,23 +105,23 @@ export default function LiveQuiz() {
         break;
       case 'question.revealed':
         setQuestion(data.question);
-        setChartCounts({});
+        setTimeLimitSeconds(data.question.time_limit_seconds || DEFAULT_TIME_LIMIT_SECONDS);
+        setRevealedAt(data.revealed_at);
         resetAnswerState();
         setView('question');
         break;
       case 'answer.accepted':
-        setView('chart');
-        break;
-      case 'chart.update':
-        setChartCounts(data.counts);
-        break;
-      case 'leaderboard.update':
-        setLeaderboard(data.rankings);
+        setLastAnswerCorrect(data.is_correct);
+        setView('result');
         break;
       case 'session.ended':
         setView('ended');
         break;
       default:
+        // chart.update / leaderboard.update are also delivered here
+        // (they're broadcast room-wide, including to students) but are
+        // instructor-only display concerns - see LiveQuizHost.js -
+        // deliberately ignored on this page.
         break;
     }
   };
@@ -165,57 +192,64 @@ export default function LiveQuiz() {
           <div className="live-waiting-spinner" />
           <h2>Waiting for the instructor...</h2>
           <p className="text-muted">The quiz will begin shortly.</p>
-          {leaderboard.length > 0 && (
-            <div style={{ width: '100%', maxWidth: 360, textAlign: 'left' }}>
-              <Leaderboard rankings={leaderboard} />
-            </div>
-          )}
         </div>
       )}
 
       {view === 'question' && question && (
         <div className="form-card">
+          <div className="live-timer-bar">
+            <div
+              className="live-timer-fill"
+              style={{ width: `${Math.max(0, (remainingSeconds / timeLimitSeconds) * 100)}%` }}
+            />
+          </div>
+          <div className="live-timer-label">{Math.ceil(remainingSeconds)}s</div>
+
           <div className="quiz-question-prompt">
             <PlateEditor value={question.body.prompt} readOnly />
           </div>
 
-          <form onSubmit={handleSubmitAnswer}>
-            {question.question_type === 'short_answer' ? (
-              <input
-                type="text"
-                className="quiz-short-answer-input"
-                value={shortAnswer}
-                onChange={(e) => setShortAnswer(e.target.value)}
-                placeholder="Your answer"
-                autoFocus
-              />
-            ) : (
-              <div className="quiz-options">
-                {(question.body.options || []).map(option => (
-                  <label className="quiz-option-row" key={option.id}>
-                    <input
-                      type={question.question_type === 'single_choice' ? 'radio' : 'checkbox'}
-                      name="live-question-option"
-                      checked={selectedOptions.includes(option.id)}
-                      onChange={() => handleToggleOption(option.id)}
-                    />
-                    {option.text}
-                  </label>
-                ))}
+          {remainingSeconds <= 0 ? (
+            <p className="text-muted">Time's up! Waiting for the next question...</p>
+          ) : (
+            <form onSubmit={handleSubmitAnswer}>
+              {question.question_type === 'short_answer' ? (
+                <input
+                  type="text"
+                  className="quiz-short-answer-input"
+                  value={shortAnswer}
+                  onChange={(e) => setShortAnswer(e.target.value)}
+                  placeholder="Your answer"
+                  autoFocus
+                />
+              ) : (
+                <div className="quiz-options">
+                  {(question.body.options || []).map(option => (
+                    <label className="quiz-option-row" key={option.id}>
+                      <input
+                        type={question.question_type === 'single_choice' ? 'radio' : 'checkbox'}
+                        name="live-question-option"
+                        checked={selectedOptions.includes(option.id)}
+                        onChange={() => handleToggleOption(option.id)}
+                      />
+                      {option.text}
+                    </label>
+                  ))}
+                </div>
+              )}
+              <div className="form-actions">
+                <button type="submit" className="btn-primary">Submit Answer</button>
               </div>
-            )}
-            <div className="form-actions">
-              <button type="submit" className="btn-primary">Submit Answer</button>
-            </div>
-          </form>
+            </form>
+          )}
         </div>
       )}
 
-      {view === 'chart' && question && (
-        <div className="form-card">
-          <p className="text-muted">Answer submitted! Here's how everyone's answering:</p>
-          <LiveBarChart question={question} counts={chartCounts} />
-          <Leaderboard rankings={leaderboard} />
+      {view === 'result' && (
+        <div className={`live-result-card ${lastAnswerCorrect ? 'is-correct' : 'is-incorrect'}`}>
+          <div className="live-result-icon">{lastAnswerCorrect ? '✓' : '✗'}</div>
+          <h2>{lastAnswerCorrect ? 'Correct!' : 'Incorrect'}</h2>
+          <p className="text-muted">Waiting for the next question...</p>
         </div>
       )}
 

@@ -53,6 +53,21 @@ def _submitted_key(room_code, question_id, user_id):
     return f'live_submitted:{room_code}:{question_id}:{user_id}'
 
 
+def _answer_key_for(question):
+    """The correct-answer info for a question, sent only to the live
+    session's host (see _handle_advance/_send_state_snapshot) so the
+    instructor's results screen can mark each bar correct/incorrect -
+    never broadcast to the room group, which only ever gets
+    StudentQuestionSerializer's sanitized body (see module docstring).
+    """
+    body = question.body or {}
+    if question.question_type in (Question.SINGLE_CHOICE, Question.MULTIPLE_CHOICE):
+        return {'correct_option_ids': body.get('correct_option_ids', [])}
+    if question.question_type == Question.SHORT_ANSWER:
+        return {'correct_answer': body.get('correct_answer', '')}
+    return {}
+
+
 def _chart_buckets_for_answer(question, answer):
     """Which live-chart bucket(s) an accepted answer increments. Choice
     questions get one bucket per selected option (the classic Mentimeter
@@ -132,11 +147,12 @@ class LiveQuizConsumer(AsyncWebsocketConsumer):
             await self._send_error('Only the host can advance questions.')
             return
 
-        next_index = await self._advance_to_next_question()
-        if next_index is None:
+        result = await self._advance_to_next_question()
+        if result is None:
             await self._send_error('Session is not active, or there are no more questions.')
             return
 
+        next_index, revealed_at = result
         question = await self._question_at_index(next_index)
         payload = StudentQuestionSerializer(question).data
 
@@ -144,6 +160,13 @@ class LiveQuizConsumer(AsyncWebsocketConsumer):
             'type': 'broadcast_question_revealed',
             'question': payload,
             'question_index': next_index,
+            'revealed_at': revealed_at,
+            # Delivered to every consumer in the group, but only merged
+            # into the outgoing message for whichever one is the host
+            # (see broadcast_question_revealed) - a single broadcast
+            # rather than a second host-only message, so message order
+            # stays exactly one-event-per-advance for every listener.
+            'answer_key': _answer_key_for(question),
         })
 
     async def _handle_end(self):
@@ -170,17 +193,26 @@ class LiveQuizConsumer(AsyncWebsocketConsumer):
 
         result = await self._record_answer(user.id, question_id, answer)
 
-        if result == 'invalid':
+        if result['status'] == 'invalid':
             await self._send_error('This question is not currently open.')
             return
 
         # Both a fresh accept and a de-duplicated resubmit tell the
         # submitter "accepted" - from their point of view a retried
         # request should look identical to the original success, the
-        # same idempotency contract as M6's async quiz_submit.
-        await self.send(text_data=json.dumps({'type': 'answer.accepted', 'question_id': question_id}))
+        # same idempotency contract as M6's async quiz_submit. is_correct
+        # is what drives the student's own correct/incorrect result
+        # screen (LiveQuiz.js) - unlike the room-wide chart/leaderboard
+        # broadcasts below, this is a private message to this connection
+        # only, so it's safe to reveal correctness here even though the
+        # question's answer key is never broadcast to the room.
+        await self.send(text_data=json.dumps({
+            'type': 'answer.accepted',
+            'question_id': question_id,
+            'is_correct': result['is_correct'],
+        }))
 
-        if result == 'duplicate':
+        if result['status'] == 'duplicate':
             return
 
         chart_counts = await self._get_chart_counts(question_id)
@@ -209,11 +241,19 @@ class LiveQuizConsumer(AsyncWebsocketConsumer):
     # way everyone else's does, with no special-cased "local echo".)
 
     async def broadcast_question_revealed(self, event):
-        await self.send(text_data=json.dumps({
+        payload = {
             'type': 'question.revealed',
             'question': event['question'],
             'question_index': event['question_index'],
-        }))
+            'revealed_at': event['revealed_at'],
+        }
+        # Every consumer in the group runs this same handler with the
+        # same event dict - self.is_host is what makes only the host's
+        # own copy of the message carry the answer key, never the
+        # students'.
+        if self.is_host:
+            payload.update(event.get('answer_key', {}))
+        await self.send(text_data=json.dumps(payload))
 
     async def broadcast_chart_update(self, event):
         await self.send(text_data=json.dumps({
@@ -242,6 +282,7 @@ class LiveQuizConsumer(AsyncWebsocketConsumer):
             'type': 'session.state',
             'status': state['status'],
             'question_index': state['current_question_index'],
+            'revealed_at': state.get('question_revealed_at'),
         }
 
         if state['status'] == LiveSession.ACTIVE:
@@ -256,6 +297,12 @@ class LiveQuizConsumer(AsyncWebsocketConsumer):
                 if question is not None:
                     payload['question'] = StudentQuestionSerializer(question).data
                     payload['chart'] = await self._get_chart_counts(question.id)
+
+                    # Host-only, same reasoning as _handle_advance's
+                    # question.answer_key - a reconnecting host needs the
+                    # answer key back too, not just a fresh advance.
+                    if self.is_host:
+                        payload.update(_answer_key_for(question))
 
         await self.send(text_data=json.dumps(payload))
 
@@ -279,7 +326,17 @@ class LiveQuizConsumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def _load_state_from_db(self):
         session = LiveSession.objects.get(room_code=self.room_code)
-        return {'status': session.status, 'current_question_index': session.current_question_index}
+        # question_revealed_at is Redis-only ephemeral state (see
+        # live_state.set_session_state) - if Redis was flushed/restarted,
+        # this fallback has no way to know it, so a reconnecting client
+        # just gets a fresh full-length countdown instead of a resumed
+        # one. Acceptable: this only happens on the Redis-down/flushed
+        # edge case, not on every reconnect.
+        return {
+            'status': session.status,
+            'current_question_index': session.current_question_index,
+            'question_revealed_at': None,
+        }
 
     @database_sync_to_async
     def _question_at_index(self, index):
@@ -302,14 +359,15 @@ class LiveQuizConsumer(AsyncWebsocketConsumer):
 
         session.current_question_index = next_index
         session.save(update_fields=['current_question_index'])
-        live_state.set_session_state(session)
-        return next_index
+        revealed_at = timezone.now().isoformat()
+        live_state.set_session_state(session, question_revealed_at=revealed_at)
+        return next_index, revealed_at
 
     @database_sync_to_async
     def _record_answer(self, user_id, question_id, answer):
         question = Question.objects.filter(id=question_id, quiz_id=self.quiz_id).first()
         if question is None:
-            return 'invalid'
+            return {'status': 'invalid', 'is_correct': None}
 
         # The submitted question must be the one currently revealed -
         # answers to a question that's already closed (or not yet
@@ -322,16 +380,18 @@ class LiveQuizConsumer(AsyncWebsocketConsumer):
             Question.objects.filter(quiz_id=self.quiz_id).order_by('order_index', 'id').values_list('id', flat=True)
         )
         if not (0 <= current_index < len(question_ids_in_order)) or question_ids_in_order[current_index] != question.id:
-            return 'invalid'
+            return {'status': 'invalid', 'is_correct': None}
+
+        is_correct = is_answer_correct(question, answer)
 
         # Idempotency: SETNX-style, the same pattern as M12's quiz_submit
         # lock - absorbs a double-click/retried request without ever
         # double-counting the score or the chart for this question.
         lock_key = _submitted_key(self.room_code, question_id, user_id)
         if not safe_add(lock_key, True, timeout=ANSWER_LOCK_TTL_SECONDS):
-            return 'duplicate'
+            return {'status': 'duplicate', 'is_correct': is_correct}
 
-        points_earned = question.points if is_answer_correct(question, answer) else 0
+        points_earned = question.points if is_correct else 0
 
         with transaction.atomic():
             submission, created = Submission.objects.select_for_update().get_or_create(
@@ -358,7 +418,7 @@ class LiveQuizConsumer(AsyncWebsocketConsumer):
         # rather than only once they get something right.
         live_state.increment_leaderboard_score(self.room_code, user_id, points_earned)
 
-        return 'ok'
+        return {'status': 'ok', 'is_correct': is_correct}
 
     @database_sync_to_async
     def _get_chart_counts(self, question_id):

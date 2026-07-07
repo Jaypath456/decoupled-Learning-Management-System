@@ -41,7 +41,16 @@ def _leaderboard_key(room_code):
     return f'live_leaderboard:{room_code}'
 
 
-def set_session_state(session):
+def set_session_state(session, question_revealed_at=None):
+    """`question_revealed_at` (an ISO timestamp string) is only ever
+    passed by consumers.py::_advance_to_next_question - it's what lets a
+    late joiner's or reconnecting client's countdown (Question.
+    time_limit_seconds, see StudentQuestionSerializer) start from the
+    correct remaining time instead of always restarting a full-length
+    timer. REST-only transitions (session_create/session_start in
+    views.py) never have a revealed question yet, so they leave this
+    None.
+    """
     safe_set(
         _state_key(session.room_code),
         {
@@ -49,6 +58,7 @@ def set_session_state(session):
             'host_id': session.host_id,
             'status': session.status,
             'current_question_index': session.current_question_index,
+            'question_revealed_at': question_revealed_at,
         },
         timeout=SESSION_STATE_TTL_SECONDS,
     )

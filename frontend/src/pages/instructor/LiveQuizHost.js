@@ -13,6 +13,7 @@ export default function LiveQuizHost() {
   const [question, setQuestion] = useState(null);
   const [questionIndex, setQuestionIndex] = useState(-1);
   const [chartCounts, setChartCounts] = useState({});
+  const [correctOptionIds, setCorrectOptionIds] = useState([]);
   const [leaderboard, setLeaderboard] = useState([]);
   const [ended, setEnded] = useState(false);
   const [error, setError] = useState('');
@@ -46,12 +47,22 @@ export default function LiveQuizHost() {
         if (data.question) {
           setQuestion(data.question);
           setChartCounts(data.chart || {});
+          // Host-only fields (quizzes/consumers.py::_answer_key_for),
+          // merged directly into this same message - never present for
+          // a student's copy of session.state.
+          setCorrectOptionIds(data.correct_option_ids || []);
         }
         break;
       case 'question.revealed':
         setQuestion(data.question);
         setQuestionIndex(data.question_index);
         setChartCounts({});
+        // Same host-only merge as above, but on the question.revealed
+        // broadcast (see broadcast_question_revealed's self.is_host
+        // check) - this is exactly why it's safe to read here
+        // unconditionally: a student's browser never receives this key
+        // at all, so there's nothing to accidentally leak client-side.
+        setCorrectOptionIds(data.correct_option_ids || []);
         setError('');
         break;
       case 'chart.update':
@@ -158,7 +169,7 @@ export default function LiveQuizHost() {
             <span className="badge badge-private">Question {questionIndex + 1}</span>
             <span className="text-muted" style={{ marginLeft: 8 }}>{totalResponses} response(s)</span>
           </div>
-          <LiveBarChart question={question} counts={chartCounts} />
+          <LiveBarChart question={question} counts={chartCounts} correctOptionIds={correctOptionIds} />
           <div className="form-actions">
             <button className="btn-primary" onClick={handleAdvance}>
               Next Question

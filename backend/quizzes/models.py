@@ -68,6 +68,11 @@ class Question(models.Model):
     body = models.JSONField(default=dict, blank=True)
     points = models.PositiveIntegerField(default=1)
     order_index = models.IntegerField(default=0)
+    # Only meaningful in a live session (quizzes/consumers.py) - drives
+    # the countdown shown on the student's screen once this question is
+    # revealed. Async quiz-taking (quiz_take/quiz_submit) ignores it
+    # entirely; there's no clock there.
+    time_limit_seconds = models.PositiveIntegerField(default=20)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

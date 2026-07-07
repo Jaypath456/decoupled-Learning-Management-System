@@ -384,6 +384,75 @@
   to { transform: rotate(360deg); }
 }
 
+.live-timer-bar {
+  height: 8px;
+  margin-bottom: 8px;
+  background: #e5e7eb;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.live-timer-fill {
+  height: 100%;
+  background: #4f46e5;
+  border-radius: 4px;
+  transition: width 0.2s linear, background 0.3s ease;
+}
+
+.live-timer-label {
+  margin-bottom: 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #6b7280;
+  text-align: right;
+}
+
+.live-result-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 48px 24px;
+  text-align: center;
+  border-radius: 8px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+}
+
+.live-result-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 72px;
+  height: 72px;
+  margin-bottom: 16px;
+  border-radius: 50%;
+  font-size: 36px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.live-result-card.is-correct .live-result-icon {
+  background: #dcfce7;
+  color: #16a34a;
+}
+
+.live-result-card.is-incorrect .live-result-icon {
+  background: #fee2e2;
+  color: #dc2626;
+}
+
+.live-result-card h2 {
+  margin: 0 0 6px;
+}
+
+.live-result-card.is-correct h2 {
+  color: #16a34a;
+}
+
+.live-result-card.is-incorrect h2 {
+  color: #dc2626;
+}
+
 /* Schedule builder */
 .schedule-course-picker {
   display: flex;

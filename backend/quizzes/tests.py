@@ -1179,6 +1179,61 @@ class LiveQuizConsumerTests(TransactionTestCase):
         await instr_comm.disconnect()
         await student_comm.disconnect()
 
+    async def test_question_revealed_carries_timer_and_host_only_answer_key(self):
+        await self._setup_session()
+
+        instr_comm, _ = await self._connect(self.instructor)
+        student_comm, _ = await self._connect(self.student)
+        await instr_comm.receive_from()
+        await student_comm.receive_from()
+
+        await instr_comm.send_to(text_data=json.dumps({'type': 'question.advance'}))
+
+        instr_revealed = json.loads(await instr_comm.receive_from())
+        student_revealed = json.loads(await student_comm.receive_from())
+
+        # Every listener (host and student alike) gets the timer and a
+        # revealed_at timestamp so a countdown can be rendered/resumed.
+        self.assertEqual(instr_revealed['question']['time_limit_seconds'], self.q1.time_limit_seconds)
+        self.assertIsNotNone(instr_revealed['revealed_at'])
+        self.assertEqual(student_revealed['revealed_at'], instr_revealed['revealed_at'])
+
+        # Only the host's copy of the same broadcast carries the answer
+        # key - the student's copy must never see it, in either shape.
+        self.assertEqual(instr_revealed['correct_option_ids'], ['b'])
+        self.assertNotIn('correct_option_ids', student_revealed)
+        self.assertNotIn('correct_option_ids', student_revealed['question'])
+
+        await instr_comm.disconnect()
+        await student_comm.disconnect()
+
+    async def test_reconnecting_host_gets_answer_key_in_state_snapshot(self):
+        await self._setup_session()
+        instr_comm, _ = await self._connect(self.instructor)
+        student_comm, _ = await self._connect(self.student)
+        await instr_comm.receive_from()
+        await student_comm.receive_from()
+
+        await instr_comm.send_to(text_data=json.dumps({'type': 'question.advance'}))
+        await instr_comm.receive_from()
+        await student_comm.receive_from()
+        await instr_comm.disconnect()
+        await student_comm.disconnect()
+
+        # A fresh connection (simulating a reconnect) should see the
+        # answer key without needing another advance.
+        late_instr_comm, _ = await self._connect(self.instructor)
+        late_student_comm, _ = await self._connect(self.student)
+
+        instr_state = json.loads(await late_instr_comm.receive_from())
+        student_state = json.loads(await late_student_comm.receive_from())
+
+        self.assertEqual(instr_state['correct_option_ids'], ['b'])
+        self.assertNotIn('correct_option_ids', student_state)
+
+        await late_instr_comm.disconnect()
+        await late_student_comm.disconnect()
+
     async def test_non_host_advance_is_rejected_and_ignored(self):
         await self._setup_session()
         comm, _ = await self._connect(self.student)
@@ -1210,6 +1265,11 @@ class LiveQuizConsumerTests(TransactionTestCase):
 
         accepted = json.loads(await student_comm.receive_from())
         self.assertEqual(accepted['type'], 'answer.accepted')
+        # is_correct is what drives the student's own correct/incorrect
+        # result screen - it's a private field on this message only,
+        # never broadcast, so it can safely reveal correctness even
+        # though the answer key itself never reaches students.
+        self.assertTrue(accepted['is_correct'])
 
         # The chart broadcast goes to everyone in the room, including
         # the host - proving the chart is a room-wide broadcast, not a
@@ -1222,6 +1282,31 @@ class LiveQuizConsumerTests(TransactionTestCase):
 
         submission = await self._get_submission(self.student)
         self.assertEqual(submission.score, 2)  # q1 is worth 2 points, answered correctly
+
+        await instr_comm.disconnect()
+        await student_comm.disconnect()
+
+    async def test_incorrect_submit_reports_is_correct_false(self):
+        await self._setup_session()
+        instr_comm, _ = await self._connect(self.instructor)
+        student_comm, _ = await self._connect(self.student)
+        await instr_comm.receive_from()
+        await student_comm.receive_from()
+
+        await instr_comm.send_to(text_data=json.dumps({'type': 'question.advance'}))
+        await instr_comm.receive_from()
+        await student_comm.receive_from()
+
+        await student_comm.send_to(
+            text_data=json.dumps({'type': 'answer.submit', 'question_id': self.q1.id, 'answer': ['a']})
+        )
+
+        accepted = json.loads(await student_comm.receive_from())
+        self.assertEqual(accepted['type'], 'answer.accepted')
+        self.assertFalse(accepted['is_correct'])
+
+        submission = await self._get_submission(self.student)
+        self.assertEqual(submission.score, 0)
 
         await instr_comm.disconnect()
         await student_comm.disconnect()
