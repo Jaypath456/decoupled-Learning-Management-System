@@ -17,6 +17,8 @@ import CourseDetail from './pages/instructor/CourseDetail';
 import ChapterForm from './pages/instructor/ChapterForm';
 import StudentList from './pages/instructor/StudentList';
 import LiveQuizHost from './pages/instructor/LiveQuizHost';
+import SectionList from './pages/instructor/SectionList';
+import SectionForm from './pages/instructor/SectionForm';
 
 // Student pages
 import Catalog from './pages/student/Catalog';
@@ -74,6 +76,15 @@ function AppRoutes() {
       } />
       <Route path="/instructor/quizzes/:quizId/live" element={
         <ProtectedRoute role="instructor"><LiveQuizHost /></ProtectedRoute>
+      } />
+      <Route path="/instructor/courses/:courseId/sections" element={
+        <ProtectedRoute role="instructor"><SectionList /></ProtectedRoute>
+      } />
+      <Route path="/instructor/courses/:courseId/sections/create" element={
+        <ProtectedRoute role="instructor"><SectionForm /></ProtectedRoute>
+      } />
+      <Route path="/instructor/sections/:sectionId/edit" element={
+        <ProtectedRoute role="instructor"><SectionForm /></ProtectedRoute>
       } />
 
       {/* Student routes */}

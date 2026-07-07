@@ -31,6 +31,7 @@ INSTALLED_APPS = [
     'users',
     'courses',
     'quizzes',
+    'schedule',
 ]
 
 MIDDLEWARE = [
