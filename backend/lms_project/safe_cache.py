@@ -38,6 +38,22 @@ def safe_delete(key):
         logger.warning('Cache DELETE failed for key=%s.', key, exc_info=True)
 
 
+def safe_delete_pattern(pattern):
+    """Deletes every cache key matching a glob-style pattern (e.g.
+    'course_catalog:published*'), for cases like catalog invalidation
+    where a single logical entry is actually spread across several keys
+    (one per page/page_size combination - see courses/views.py::
+    course_list). Relies on django-redis's delete_pattern, which isn't
+    part of Django's generic cache API, so this degrades to a no-op
+    (rather than raising) on any other cache backend."""
+    try:
+        cache.delete_pattern(pattern)
+    except AttributeError:
+        pass
+    except Exception:
+        logger.warning('Cache DELETE_PATTERN failed for pattern=%s.', pattern, exc_info=True)
+
+
 def safe_add(key, value, timeout=None, default_on_error=True):
     """Wraps cache.add (SETNX semantics: sets the value only if the key
     isn't already present, returns True iff it set the value).

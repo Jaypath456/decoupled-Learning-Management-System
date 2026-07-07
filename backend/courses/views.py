@@ -1,17 +1,32 @@
 from django.conf import settings
+from django.db.models import Count
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
-from lms_project.safe_cache import safe_delete, safe_get, safe_set
+from lms_project.safe_cache import safe_delete_pattern, safe_get, safe_set
 from .models import Course, Chapter, Enrollment
+from .pagination import StandardResultsPagination
 from .serializers import (
     CourseSerializer, 
     ChapterSerializer, 
     EnrollmentSerializer
 )
 from .permissions import IsInstructor, IsStudent, IsCourseInstructor, IsEnrolled
+
+
+def _with_course_counts(queryset):
+    """Annotates chapter_count/enrolled_count on a Course queryset with a
+    single GROUP BY query, instead of CourseSerializer issuing two COUNT
+    queries per course (see CourseSerializer.get_chapter_count/
+    get_enrolled_count for the fallback used when a queryset isn't
+    annotated, e.g. nested course objects reached via my_courses)."""
+    return queryset.annotate(
+        chapter_count=Count('chapters', distinct=True),
+        enrolled_count=Count('enrollments', distinct=True),
+    )
+
 
 # ─── Course Views ─────────────────────────────────────────────
 
@@ -26,7 +41,10 @@ CATALOG_CACHE_TTL_SECONDS = 60
 
 
 def _invalidate_catalog_cache():
-    safe_delete(CATALOG_CACHE_KEY)
+    # Wipes every cached page/page_size variant of the catalog (see
+    # course_list's cache_key construction), not just the plain
+    # CATALOG_CACHE_KEY used for the default first page.
+    safe_delete_pattern(f'{CATALOG_CACHE_KEY}*')
 
 
 @api_view(['GET'])
@@ -37,24 +55,57 @@ def course_list(request):
     # exact same code path minus caching, never for production use.
     caching_enabled = not settings.LOAD_TEST_DISABLE_REDIS_OPTIMIZATIONS
 
+    # The cached payload is the *paginated* envelope (count/next/previous/
+    # results), so the cache key has to vary by page/page_size too -
+    # otherwise a page-2 request could be served page 1's cached response.
+    # The overwhelmingly common case (first page, default size) still
+    # collapses onto the plain CATALOG_CACHE_KEY used by the rest of this
+    # module (invalidation, tests).
+    page_param = request.query_params.get('page')
+    page_size_param = request.query_params.get('page_size')
+    cache_key = CATALOG_CACHE_KEY
+    if page_param or page_size_param:
+        cache_key = f'{CATALOG_CACHE_KEY}:page={page_param or "1"}:size={page_size_param or ""}'
+
     if caching_enabled:
-        cached = safe_get(CATALOG_CACHE_KEY)
+        cached = safe_get(cache_key)
         if cached is not None:
             return Response(cached)
 
-    courses = Course.objects.filter(is_published=True).select_related('instructor')
-    serializer = CourseSerializer(courses, many=True)
+    # Course.Meta.ordering (-created_at) isn't a unique key - courses
+    # created in the same request/transaction can share a timestamp,
+    # which would make paginated results unstable across page fetches
+    # (Django warns about this: UnorderedObjectListWarning). Adding `id`
+    # as a tiebreaker keeps ordering fully deterministic without touching
+    # the model's default ordering.
+    courses = _with_course_counts(
+        Course.objects.filter(is_published=True)
+        .select_related('instructor')
+        .order_by('-created_at', 'id')
+    )
+
+    paginator = StandardResultsPagination()
+    page = paginator.paginate_queryset(courses, request)
+    serializer = CourseSerializer(page, many=True)
+    response = paginator.get_paginated_response(serializer.data)
 
     if caching_enabled:
-        safe_set(CATALOG_CACHE_KEY, serializer.data, CATALOG_CACHE_TTL_SECONDS)
+        safe_set(cache_key, response.data, CATALOG_CACHE_TTL_SECONDS)
 
-    return Response(serializer.data)
+    return response
 
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated, IsInstructor])
 def instructor_courses(request):
-    courses = Course.objects.filter(instructor=request.user).select_related('instructor')
+    # Deliberately not paginated: the Dashboard/CourseList frontend pages
+    # compute aggregate stats (total published, total students) across the
+    # instructor's *entire* course list, and an instructor's own course
+    # count is bounded by what they personally author - unlike the public
+    # catalog, this isn't a platform-wide growth concern.
+    courses = _with_course_counts(
+        Course.objects.filter(instructor=request.user).select_related('instructor')
+    )
     serializer = CourseSerializer(courses, many=True)
     return Response(serializer.data)
 
@@ -69,6 +120,12 @@ def course_create(request):
         # catalog cache must be invalidated unconditionally rather than
         # only when is_published=True.
         _invalidate_catalog_cache()
+        # Re-fetch through the annotated queryset so the response uses the
+        # same annotated code path as every other CourseSerializer usage,
+        # instead of relying on the fallback .count() queries for this one
+        # case (a freshly created course has 0 chapters/enrollments either
+        # way, but this keeps the behavior consistent and query-cheap).
+        course = _with_course_counts(Course.objects.filter(pk=course.pk)).get()
         return Response(CourseSerializer(course).data, status=status.HTTP_201_CREATED)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -76,7 +133,7 @@ def course_create(request):
 @api_view(['GET', 'PUT', 'DELETE'])
 @permission_classes([IsAuthenticated])
 def course_detail(request, course_id):
-    course = get_object_or_404(Course, id=course_id)
+    course = get_object_or_404(_with_course_counts(Course.objects.all()), id=course_id)
 
     is_owner = IsCourseInstructor().has_object_permission(request, None, course)
 

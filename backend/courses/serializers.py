@@ -38,9 +38,21 @@ class CourseSerializer(serializers.ModelSerializer):
         ]
 
     def get_chapter_count(self, obj):
+        # Views that list many courses at once (course_list,
+        # instructor_courses) annotate chapter_count via .annotate() to
+        # avoid one COUNT query per course. Views that only ever serialize
+        # a single course, or nested cases like my_courses's
+        # select_related('course'), don't annotate - fall back to a direct
+        # count query so those paths stay correct either way.
+        annotated = getattr(obj, 'chapter_count', None)
+        if annotated is not None:
+            return annotated
         return obj.chapters.count()
 
     def get_enrolled_count(self, obj):
+        annotated = getattr(obj, 'enrolled_count', None)
+        if annotated is not None:
+            return annotated
         return obj.enrollments.count()
 
 

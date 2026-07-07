@@ -79,7 +79,11 @@ class ChapterAccessTests(APITestCase):
 class CatalogCacheTests(APITestCase):
     """Covers Redis-backed caching of the course_list endpoint, its
     invalidation on writes, and graceful degradation if the cache
-    backend is unreachable."""
+    backend is unreachable.
+
+    course_list returns a paginated envelope ({count, next, previous,
+    results}), so these assertions read response.data['results'] /
+    ['count'] rather than treating response.data as a bare list."""
 
     def setUp(self):
         cache.clear()
@@ -98,14 +102,14 @@ class CatalogCacheTests(APITestCase):
         Course.objects.create(title='Cached Course', instructor=self.instructor, is_published=True)
 
         first = self.client.get('/api/courses/')
-        self.assertEqual(len(first.data), 1)
+        self.assertEqual(len(first.data['results']), 1)
 
         # A course created after the first request should NOT appear on
         # a second request if it's truly served from cache.
         Course.objects.create(title='Not Yet Cached', instructor=self.instructor, is_published=True)
         second = self.client.get('/api/courses/')
 
-        self.assertEqual(len(second.data), 1)
+        self.assertEqual(len(second.data['results']), 1)
         self.assertEqual(second.data, first.data)
 
     def test_cache_is_invalidated_on_course_create(self):
@@ -116,7 +120,7 @@ class CatalogCacheTests(APITestCase):
 
         self.client.force_authenticate(user=self.student)
         response = self.client.get('/api/courses/')
-        self.assertEqual(len(response.data), 1)
+        self.assertEqual(len(response.data['results']), 1)
 
     def test_cache_is_invalidated_on_publish_toggle(self):
         course = Course.objects.create(title='Draft', instructor=self.instructor, is_published=False)
@@ -127,7 +131,7 @@ class CatalogCacheTests(APITestCase):
 
         self.client.force_authenticate(user=self.student)
         response = self.client.get('/api/courses/')
-        self.assertEqual(len(response.data), 1)
+        self.assertEqual(len(response.data['results']), 1)
 
     def test_cache_is_invalidated_on_course_delete(self):
         course = Course.objects.create(title='To Delete', instructor=self.instructor, is_published=True)
@@ -138,7 +142,7 @@ class CatalogCacheTests(APITestCase):
 
         self.client.force_authenticate(user=self.student)
         response = self.client.get('/api/courses/')
-        self.assertEqual(len(response.data), 0)
+        self.assertEqual(len(response.data['results']), 0)
 
     def test_catalog_still_works_if_cache_get_is_unavailable(self):
         Course.objects.create(title='Resilient Course', instructor=self.instructor, is_published=True)
@@ -147,7 +151,7 @@ class CatalogCacheTests(APITestCase):
             response = self.client.get('/api/courses/')
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(response.data), 1)
+        self.assertEqual(len(response.data['results']), 1)
 
     def test_catalog_still_works_if_cache_set_is_unavailable(self):
         Course.objects.create(title='Resilient Course 2', instructor=self.instructor, is_published=True)
@@ -156,20 +160,42 @@ class CatalogCacheTests(APITestCase):
             response = self.client.get('/api/courses/')
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(response.data), 1)
+        self.assertEqual(len(response.data['results']), 1)
 
     def test_cache_key_used_matches_expected_constant(self):
         # Sanity check that the view is actually using the documented
         # cache key (so ops/debugging docs referencing it stay accurate).
+        # Requests with no page/page_size param collapse onto the plain
+        # CATALOG_CACHE_KEY (see course_list's cache_key construction).
         self.client.get('/api/courses/')
         self.assertIsNotNone(cache.get(CATALOG_CACHE_KEY))
+
+    def test_different_pages_are_cached_independently(self):
+        for i in range(13):  # > one default page (page_size=12)
+            Course.objects.create(title=f'Page Course {i}', instructor=self.instructor, is_published=True)
+
+        first_page = self.client.get('/api/courses/')
+        second_page = self.client.get('/api/courses/?page=2')
+
+        self.assertEqual(len(first_page.data['results']), 12)
+        self.assertEqual(len(second_page.data['results']), 1)
+        first_ids = {c['id'] for c in first_page.data['results']}
+        second_ids = {c['id'] for c in second_page.data['results']}
+        self.assertTrue(first_ids.isdisjoint(second_ids))
+
+        # Re-fetching each page still returns its own cached page, not
+        # the other page's cached response.
+        first_again = self.client.get('/api/courses/')
+        second_again = self.client.get('/api/courses/?page=2')
+        self.assertEqual(first_again.data, first_page.data)
+        self.assertEqual(second_again.data, second_page.data)
 
     @override_settings(LOAD_TEST_DISABLE_REDIS_OPTIMIZATIONS=True)
     def test_caching_is_skipped_when_load_test_toggle_disables_it(self):
         Course.objects.create(title='Toggle Course', instructor=self.instructor, is_published=True)
 
         first = self.client.get('/api/courses/')
-        self.assertEqual(len(first.data), 1)
+        self.assertEqual(len(first.data['results']), 1)
         self.assertIsNone(cache.get(CATALOG_CACHE_KEY))
 
         # With caching disabled, a course created after the first
@@ -178,7 +204,7 @@ class CatalogCacheTests(APITestCase):
         # test_second_request_is_served_from_cache above.
         Course.objects.create(title='Also Visible', instructor=self.instructor, is_published=True)
         second = self.client.get('/api/courses/')
-        self.assertEqual(len(second.data), 2)
+        self.assertEqual(len(second.data['results']), 2)
 
 
 class SeedDemoCommandTests(TestCase):
@@ -454,3 +480,143 @@ class StudentRosterTests(APITestCase):
         self.assertEqual(len(response.data), 1)
         self.assertNotIn('phone', response.data[0])
         self.assertEqual(response.data[0]['email'], 'roster_student@test.com')
+
+
+class CourseCatalogQueryTests(APITestCase):
+    """Covers the M4 pagination + N+1 fixes for the public catalog."""
+
+    NUM_COURSES = 50
+
+    def setUp(self):
+        # The catalog cache is keyed by page/page_size (see
+        # courses/views.py::course_list) and lives in Redis, outside
+        # Django's per-test transaction rollback - clear it so a cached
+        # response from an earlier test can't leak into these query-count
+        # assertions.
+        cache.clear()
+        self.instructor = User.objects.create_user(
+            username='catalog_instructor', password='password123', role='instructor'
+        )
+        self.student = User.objects.create_user(
+            username='catalog_student', password='password123', role='student'
+        )
+
+        self.courses = []
+        for i in range(self.NUM_COURSES):
+            course = Course.objects.create(
+                title=f'Course {i}', instructor=self.instructor, is_published=True
+            )
+            Chapter.objects.create(course=course, title='Chapter 1', visibility='public')
+            self.courses.append(course)
+
+        # Enroll the student in a handful of courses so enrolled_count > 0
+        # for at least some rows.
+        for course in self.courses[:5]:
+            Enrollment.objects.create(student=self.student, course=course)
+
+    def test_catalog_response_is_paginated(self):
+        self.client.force_authenticate(user=self.student)
+
+        response = self.client.get('/api/courses/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('count', response.data)
+        self.assertIn('next', response.data)
+        self.assertIn('previous', response.data)
+        self.assertIn('results', response.data)
+        self.assertEqual(response.data['count'], self.NUM_COURSES)
+        self.assertEqual(len(response.data['results']), 12)  # default page_size
+        self.assertIsNotNone(response.data['next'])
+        self.assertIsNone(response.data['previous'])
+
+    def test_catalog_query_count_is_constant_regardless_of_course_count(self):
+        self.client.force_authenticate(user=self.student)
+
+        # 1 query for the annotated/select_related page of courses,
+        # 1 query for the paginator's total .count(). This must not grow
+        # with the number of courses (the N+1 the audit originally flagged).
+        with self.assertNumQueries(2):
+            response = self.client.get('/api/courses/')
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_catalog_counts_match_manual_counts(self):
+        self.client.force_authenticate(user=self.student)
+
+        response = self.client.get('/api/courses/')
+
+        for item in response.data['results']:
+            course = Course.objects.get(id=item['id'])
+            self.assertEqual(item['chapter_count'], course.chapters.count())
+            self.assertEqual(item['enrolled_count'], course.enrollments.count())
+
+    def test_can_load_next_page(self):
+        self.client.force_authenticate(user=self.student)
+
+        first_page = self.client.get('/api/courses/')
+        next_url = first_page.data['next']
+        # DRF returns an absolute URL (http://testserver/api/courses/?page=2);
+        # the Django test client only needs the path + querystring.
+        next_path = next_url.split('testserver', 1)[-1]
+
+        second_page = self.client.get(next_path)
+
+        self.assertEqual(second_page.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(second_page.data['results']), 12)
+        first_ids = {c['id'] for c in first_page.data['results']}
+        second_ids = {c['id'] for c in second_page.data['results']}
+        self.assertTrue(first_ids.isdisjoint(second_ids))
+
+    def test_instructor_courses_endpoint_is_not_paginated(self):
+        self.client.force_authenticate(user=self.instructor)
+
+        response = self.client.get('/api/courses/mine/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIsInstance(response.data, list)
+        self.assertEqual(len(response.data), self.NUM_COURSES)
+
+    def test_instructor_courses_counts_are_correct(self):
+        self.client.force_authenticate(user=self.instructor)
+
+        response = self.client.get('/api/courses/mine/')
+
+        for item in response.data:
+            course = Course.objects.get(id=item['id'])
+            self.assertEqual(item['chapter_count'], course.chapters.count())
+            self.assertEqual(item['enrolled_count'], course.enrollments.count())
+
+    def test_my_courses_nested_course_counts_still_correct(self):
+        # my_courses is not annotated (nested via select_related), so this
+        # exercises CourseSerializer's fallback .count() path rather than
+        # the annotated fast path - both must return the same numbers.
+        self.client.force_authenticate(user=self.student)
+
+        response = self.client.get('/api/my-courses/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 5)
+        for item in response.data:
+            course = Course.objects.get(id=item['course']['id'])
+            self.assertEqual(item['course']['chapter_count'], course.chapters.count())
+            self.assertEqual(item['course']['enrolled_count'], course.enrollments.count())
+
+    def test_course_create_response_has_zero_counts(self):
+        self.client.force_authenticate(user=self.instructor)
+
+        response = self.client.post(
+            '/api/courses/create/', {'title': 'Brand New Course'}, format='json'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['chapter_count'], 0)
+        self.assertEqual(response.data['enrolled_count'], 0)
+
+    def test_course_detail_counts_match_manual_counts(self):
+        self.client.force_authenticate(user=self.student)
+        course = self.courses[0]
+
+        response = self.client.get(f'/api/courses/{course.id}/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['chapter_count'], course.chapters.count())
+        self.assertEqual(response.data['enrolled_count'], course.enrollments.count())
