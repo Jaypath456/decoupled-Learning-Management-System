@@ -269,6 +269,32 @@ class QuestionOwnershipTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
         self.assertTrue(Question.objects.filter(id=self.question.id).exists())
 
+    def test_owner_can_list_questions_for_quiz(self):
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.get(f'/api/quizzes/{self.quiz.id}/questions/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data), 1)
+        self.assertEqual(response.data[0]['id'], self.question.id)
+        # Instructor-facing list includes correct answers - only reachable
+        # by the owning instructor (see test below).
+        self.assertIn('correct_option_ids', response.data[0]['body'])
+
+    def test_non_owner_instructor_cannot_list_questions(self):
+        self.client.force_authenticate(user=self.other_instructor)
+
+        response = self.client.get(f'/api/quizzes/{self.quiz.id}/questions/')
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_student_cannot_list_questions(self):
+        self.client.force_authenticate(user=self.student)
+
+        response = self.client.get(f'/api/quizzes/{self.quiz.id}/questions/')
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
     def test_owner_can_read_update_and_delete_question(self):
         self.client.force_authenticate(user=self.owner)
 

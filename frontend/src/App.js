@@ -19,6 +19,9 @@ import StudentList from './pages/instructor/StudentList';
 import LiveQuizHost from './pages/instructor/LiveQuizHost';
 import SectionList from './pages/instructor/SectionList';
 import SectionForm from './pages/instructor/SectionForm';
+import QuizForm from './pages/instructor/QuizForm';
+import QuizManage from './pages/instructor/QuizManage';
+import QuestionForm from './pages/instructor/QuestionForm';
 
 // Student pages
 import Catalog from './pages/student/Catalog';
@@ -28,6 +31,8 @@ import ChapterReader from './pages/student/ChapterReader';
 import LiveQuiz from './pages/student/LiveQuiz';
 import ScheduleBuilder from './pages/student/ScheduleBuilder';
 import ScheduleView from './pages/student/ScheduleView';
+import QuizTake from './pages/student/QuizTake';
+import QuizResult from './pages/student/QuizResult';
 
 import './App.css';
 
@@ -88,6 +93,21 @@ function AppRoutes() {
       <Route path="/instructor/sections/:sectionId/edit" element={
         <ProtectedRoute role="instructor"><SectionForm /></ProtectedRoute>
       } />
+      <Route path="/instructor/courses/:courseId/quizzes/create" element={
+        <ProtectedRoute role="instructor"><QuizForm /></ProtectedRoute>
+      } />
+      <Route path="/instructor/courses/:courseId/quizzes/:quizId/edit" element={
+        <ProtectedRoute role="instructor"><QuizForm /></ProtectedRoute>
+      } />
+      <Route path="/instructor/quizzes/:quizId" element={
+        <ProtectedRoute role="instructor"><QuizManage /></ProtectedRoute>
+      } />
+      <Route path="/instructor/quizzes/:quizId/questions/create" element={
+        <ProtectedRoute role="instructor"><QuestionForm /></ProtectedRoute>
+      } />
+      <Route path="/instructor/questions/:questionId/edit" element={
+        <ProtectedRoute role="instructor"><QuestionForm /></ProtectedRoute>
+      } />
 
       {/* Student routes */}
       <Route path="/student/catalog" element={
@@ -113,6 +133,12 @@ function AppRoutes() {
       } />
       <Route path="/student/schedule/build" element={
         <ProtectedRoute role="student"><ScheduleBuilder /></ProtectedRoute>
+      } />
+      <Route path="/student/quizzes/:quizId/take" element={
+        <ProtectedRoute role="student"><QuizTake /></ProtectedRoute>
+      } />
+      <Route path="/student/quizzes/:quizId/result" element={
+        <ProtectedRoute role="student"><QuizResult /></ProtectedRoute>
       } />
     </Routes>
   );

@@ -8,6 +8,7 @@ export default function CourseView() {
   const { courseId } = useParams();
   const [course, setCourse] = useState(null);
   const [chapters, setChapters] = useState([]);
+  const [quizzes, setQuizzes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [isEnrolled, setIsEnrolled] = useState(false);
   const [enrolling, setEnrolling] = useState(false);
@@ -16,15 +17,17 @@ export default function CourseView() {
   useEffect(() => {
     const fetchAll = async () => {
       try {
-        const [courseRes, chaptersRes, enrollRes] = await Promise.all([
+        const [courseRes, chaptersRes, enrollRes, quizzesRes] = await Promise.all([
           api.get(`/courses/${courseId}/`),
           api.get(`/courses/${courseId}/chapters/`),
           api.get(`/courses/${courseId}/enrollment-status/`),
+          api.get(`/courses/${courseId}/quizzes/`),
         ]);
 
         setCourse(courseRes.data);
         setChapters(chaptersRes.data);
         setIsEnrolled(enrollRes.data.enrolled);
+        setQuizzes(quizzesRes.data);
 
         // The persistent (non-live) leaderboard - total quiz score
         // across this course - only enrolled students can see it
@@ -112,6 +115,35 @@ export default function CourseView() {
                 </Link>
               ) : (
                 <span className="locked-msg">Join to read</span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <h2 className="chapters-heading">Quizzes</h2>
+
+      {quizzes.length === 0 ? (
+        <p className="text-muted">No quizzes available yet.</p>
+      ) : (
+        <div className="chapter-list">
+          {quizzes.map((quiz, index) => (
+            <div className="student-chapter-item" key={quiz.id}>
+              <div className="chapter-left">
+                <span className="chapter-number">{index + 1}</span>
+                <div>
+                  <div className="chapter-title">{quiz.title}</div>
+                  <div className="text-muted" style={{ fontSize: 12 }}>
+                    {quiz.question_count} question{quiz.question_count === 1 ? '' : 's'}
+                  </div>
+                </div>
+              </div>
+              {isEnrolled ? (
+                <Link to={`/student/quizzes/${quiz.id}/take`} className="btn-outline">
+                  Take Quiz
+                </Link>
+              ) : (
+                <span className="locked-msg">Join to take</span>
               )}
             </div>
           ))}

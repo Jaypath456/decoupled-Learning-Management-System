@@ -7,17 +7,20 @@ export default function CourseDetail() {
   const { courseId } = useParams();
   const [course, setCourse] = useState(null);
   const [chapters, setChapters] = useState([]);
+  const [quizzes, setQuizzes] = useState([]);
   const [loading, setLoading] = useState(true);
 
 
   const fetchData = useCallback(async () => {
     try {
-      const [courseRes, chaptersRes] = await Promise.all([
+      const [courseRes, chaptersRes, quizzesRes] = await Promise.all([
         api.get(`/courses/${courseId}/`),
         api.get(`/courses/${courseId}/chapters/`),
+        api.get(`/courses/${courseId}/quizzes/`),
       ]);
       setCourse(courseRes.data);
       setChapters(chaptersRes.data);
+      setQuizzes(quizzesRes.data);
     } catch (err) {
       console.error(err);
     } finally {
@@ -31,6 +34,12 @@ export default function CourseDetail() {
   const handleDeleteChapter = async (chapterId) => {
     if (!window.confirm('Delete this chapter?')) return;
     await api.delete(`/chapters/${chapterId}/`);
+    fetchData();
+  };
+
+  const handleDeleteQuiz = async (quizId) => {
+    if (!window.confirm('Delete this quiz? This also deletes all of its questions and student submissions.')) return;
+    await api.delete(`/quizzes/${quizId}/`);
     fetchData();
   };
 
@@ -113,6 +122,48 @@ export default function CourseDetail() {
               <div className="chapter-actions">
                 <Link to={`/instructor/chapters/${chapter.id}/edit`} className="btn-sm">Edit</Link>
                 <button onClick={() => handleDeleteChapter(chapter.id)} className="btn-sm btn-danger">
+                  Delete
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="section-header">
+        <h2>Quizzes</h2>
+        <Link to={`/instructor/courses/${courseId}/quizzes/create`} className="btn-primary">
+          + Add Quiz
+        </Link>
+      </div>
+
+      {quizzes.length === 0 ? (
+        <div className="empty-state">
+          <p>No quizzes yet. Add your first quiz to get started.</p>
+          <Link to={`/instructor/courses/${courseId}/quizzes/create`} className="btn-primary">
+            Add Quiz
+          </Link>
+        </div>
+      ) : (
+        <div className="chapter-list">
+          {quizzes.map((quiz) => (
+            <div className="chapter-item" key={quiz.id}>
+              <div className="chapter-left">
+                <div>
+                  <div className="chapter-title">{quiz.title}</div>
+                  <div className="chapter-meta">
+                    <span className={`badge ${quiz.is_published ? 'badge-published' : 'badge-draft'}`}>
+                      {quiz.is_published ? 'Published' : 'Draft'}
+                    </span>
+                    <span className="text-muted" style={{ marginLeft: 8 }}>
+                      {quiz.question_count} question{quiz.question_count === 1 ? '' : 's'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <div className="chapter-actions">
+                <Link to={`/instructor/quizzes/${quiz.id}`} className="btn-sm">Manage</Link>
+                <button onClick={() => handleDeleteQuiz(quiz.id)} className="btn-sm btn-danger">
                   Delete
                 </button>
               </div>

@@ -309,6 +309,17 @@
 
 /* Quiz taking (shared shapes used by both the async quiz-taker and the
    live quiz question view) */
+.quiz-question-card {
+  margin-bottom: 16px;
+}
+
+.quiz-question-heading {
+  font-size: 15px;
+  font-weight: 600;
+  color: #111827;
+  margin-bottom: 10px;
+}
+
 .quiz-question-prompt {
   margin-bottom: 14px;
   font-size: 15px;
@@ -414,4 +425,27 @@
   font-size: 14px;
   color: #374151;
   font-weight: 500;
+}
+
+/* Quiz result */
+.quiz-result-card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 32px;
+  text-align: center;
+  margin-bottom: 20px;
+}
+
+.quiz-result-score {
+  font-size: 40px;
+  font-weight: 700;
+  color: #4f46e5;
+  margin: 12px 0 4px;
+}
+
+.quiz-result-percentage {
+  font-size: 16px;
+  color: #6b7280;
+  margin-bottom: 8px;
 }
