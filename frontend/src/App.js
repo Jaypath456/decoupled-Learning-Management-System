@@ -16,12 +16,23 @@ import CourseForm from './pages/instructor/CourseForm';
 import CourseDetail from './pages/instructor/CourseDetail';
 import ChapterForm from './pages/instructor/ChapterForm';
 import StudentList from './pages/instructor/StudentList';
+import LiveQuizHost from './pages/instructor/LiveQuizHost';
+import SectionList from './pages/instructor/SectionList';
+import SectionForm from './pages/instructor/SectionForm';
+import QuizForm from './pages/instructor/QuizForm';
+import QuizManage from './pages/instructor/QuizManage';
+import QuestionForm from './pages/instructor/QuestionForm';
 
 // Student pages
 import Catalog from './pages/student/Catalog';
 import MyCourses from './pages/student/MyCourses';
 import CourseView from './pages/student/CourseView';
 import ChapterReader from './pages/student/ChapterReader';
+import LiveQuiz from './pages/student/LiveQuiz';
+import ScheduleBuilder from './pages/student/ScheduleBuilder';
+import ScheduleView from './pages/student/ScheduleView';
+import QuizTake from './pages/student/QuizTake';
+import QuizResult from './pages/student/QuizResult';
 
 import './App.css';
 
@@ -70,6 +81,33 @@ function AppRoutes() {
       <Route path="/instructor/courses/:courseId/students" element={
         <ProtectedRoute role="instructor"><StudentList /></ProtectedRoute>
       } />
+      <Route path="/instructor/quizzes/:quizId/live" element={
+        <ProtectedRoute role="instructor"><LiveQuizHost /></ProtectedRoute>
+      } />
+      <Route path="/instructor/courses/:courseId/sections" element={
+        <ProtectedRoute role="instructor"><SectionList /></ProtectedRoute>
+      } />
+      <Route path="/instructor/courses/:courseId/sections/create" element={
+        <ProtectedRoute role="instructor"><SectionForm /></ProtectedRoute>
+      } />
+      <Route path="/instructor/sections/:sectionId/edit" element={
+        <ProtectedRoute role="instructor"><SectionForm /></ProtectedRoute>
+      } />
+      <Route path="/instructor/courses/:courseId/quizzes/create" element={
+        <ProtectedRoute role="instructor"><QuizForm /></ProtectedRoute>
+      } />
+      <Route path="/instructor/courses/:courseId/quizzes/:quizId/edit" element={
+        <ProtectedRoute role="instructor"><QuizForm /></ProtectedRoute>
+      } />
+      <Route path="/instructor/quizzes/:quizId" element={
+        <ProtectedRoute role="instructor"><QuizManage /></ProtectedRoute>
+      } />
+      <Route path="/instructor/quizzes/:quizId/questions/create" element={
+        <ProtectedRoute role="instructor"><QuestionForm /></ProtectedRoute>
+      } />
+      <Route path="/instructor/questions/:questionId/edit" element={
+        <ProtectedRoute role="instructor"><QuestionForm /></ProtectedRoute>
+      } />
 
       {/* Student routes */}
       <Route path="/student/catalog" element={
@@ -83,6 +121,24 @@ function AppRoutes() {
       } />
       <Route path="/student/chapters/:chapterId" element={
         <ProtectedRoute role="student"><ChapterReader /></ProtectedRoute>
+      } />
+      <Route path="/student/live" element={
+        <ProtectedRoute role="student"><LiveQuiz /></ProtectedRoute>
+      } />
+      <Route path="/student/live/:roomCode" element={
+        <ProtectedRoute role="student"><LiveQuiz /></ProtectedRoute>
+      } />
+      <Route path="/student/schedule" element={
+        <ProtectedRoute role="student"><ScheduleView /></ProtectedRoute>
+      } />
+      <Route path="/student/schedule/build" element={
+        <ProtectedRoute role="student"><ScheduleBuilder /></ProtectedRoute>
+      } />
+      <Route path="/student/quizzes/:quizId/take" element={
+        <ProtectedRoute role="student"><QuizTake /></ProtectedRoute>
+      } />
+      <Route path="/student/quizzes/:quizId/result" element={
+        <ProtectedRoute role="student"><QuizResult /></ProtectedRoute>
       } />
     </Routes>
   );

@@ -11,6 +11,17 @@ class Course(models.Model):
         related_name='courses'
     )
     is_published = models.BooleanField(default=False)
+    # Nullable: existing courses predate the concept of a term, and not
+    # every course needs to be scheduled. Also doubles as the source of
+    # truth for "has this course's tenure ended" (term.end_date), used by
+    # the course chat tenure-reset feature in a later milestone.
+    term = models.ForeignKey(
+        'schedule.Term',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='courses'
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

@@ -1,0 +1,98 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-classavo_db}
+      POSTGRES_USER: ${DB_USER:-classavo_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-your_password_here}
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-classavo_user} -d ${DB_NAME:-classavo_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Backs Django's cache, the Celery broker, the Channels layer, and
+  # live-session state.
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DB_NAME: ${DB_NAME:-classavo_db}
+      DB_USER: ${DB_USER:-classavo_user}
+      DB_PASSWORD: ${DB_PASSWORD:-your_password_here}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: ${SECRET_KEY:-docker-compose-local-dev-secret-key}
+      DEBUG: ${DEBUG:-True}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1,backend}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+      # Only ever set to True for the "before" half of a loadtests/
+      # before/after comparison (see loadtests/README.md) - defaults to
+      # off (optimizations enabled) for normal use.
+      LOAD_TEST_DISABLE_REDIS_OPTIMIZATIONS: ${LOAD_TEST_DISABLE_REDIS_OPTIMIZATIONS:-False}
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      - ./backend:/app
+
+  frontend:
+    build:
+      context: ./frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      REACT_APP_API_URL: ${REACT_APP_API_URL:-http://localhost:8000/api}
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+
+  # Not started by a normal `docker compose up` - gated behind the
+  # "loadtest" profile so it only runs when explicitly requested, e.g.:
+  #   docker compose --profile loadtest run --rm locust \
+  #     --headless --users 100 --spawn-rate 20 --run-time 2m \
+  #     --csv /reports/rest_100users
+  # See loadtests/README.md for the full before/after methodology.
+  locust:
+    image: locustio/locust:2.44.4
+    profiles: ["loadtest"]
+    depends_on:
+      - backend
+    volumes:
+      - ./loadtests:/mnt/locust
+      - ./loadtests/reports:/reports
+    working_dir: /mnt/locust
+    entrypoint: ["locust", "-f", "locustfile.py", "--host", "http://backend:8000"]
+    ports:
+      - "8089:8089"
+
+volumes:
+  postgres_data:
+  redis_data:

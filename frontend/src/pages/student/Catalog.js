@@ -5,6 +5,8 @@ import './student.css';
 
 export default function Catalog() {
   const [courses, setCourses] = useState([]);
+  const [nextPageUrl, setNextPageUrl] = useState(null);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [enrolledIds, setEnrolledIds] = useState([]); 
   const [loading, setLoading] = useState(true);
   const [enrolling, setEnrolling] = useState(null);
@@ -16,12 +18,30 @@ export default function Catalog() {
       api.get('/my-courses/') 
     ])
       .then(([resCourses, resEnrolled]) => {
-        setCourses(resCourses.data);  
+        // /courses/ is paginated ({count, next, previous, results}) since
+        // the catalog can grow without bound; /my-courses/ is not (see
+        // backend/courses/views.py for why).
+        setCourses(resCourses.data.results);
+        setNextPageUrl(resCourses.data.next);
         setEnrolledIds(resEnrolled.data.map(c => c.course.id));
       })
       .catch(console.error)
       .finally(() => setLoading(false));
   }, []);
+
+  const handleLoadMore = async () => {
+    if (!nextPageUrl) return;
+    setLoadingMore(true);
+    try {
+      const res = await api.get(nextPageUrl);
+      setCourses(prev => [...prev, ...res.data.results]);
+      setNextPageUrl(res.data.next);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   const handleEnroll = async (courseId) => {
     setEnrolling(courseId);
@@ -99,6 +119,18 @@ export default function Catalog() {
               </div>
             );
           })} 
+        </div>
+      )}
+
+      {!loading && nextPageUrl && (
+        <div className="load-more-row">
+          <button
+            onClick={handleLoadMore}
+            className="btn-outline"
+            disabled={loadingMore}
+          >
+            {loadingMore ? 'Loading...' : 'Load More Courses'}
+          </button>
         </div>
       )}
     </div>
