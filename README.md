@@ -56,7 +56,7 @@ This builds the backend and frontend images, starts PostgreSQL and Redis, waits 
 * Backend API: [http://localhost:8000/api](http://localhost:8000/api)
 * Django admin: [http://localhost:8000/admin](http://localhost:8000/admin)
 
-Redis is started for use by upcoming milestones (caching, live sessions) - the Django app does not use it yet.
+Redis backs Django's cache, Celery, Channels, and live-session state — keep it running alongside Postgres.
 
 ### 3. Seed demo data
 In a second terminal, populate the database with demo instructors, students, courses, chapters, and enrollments:
@@ -76,25 +76,56 @@ PostgreSQL data is stored in a named volume (`postgres_data`), so it survives `d
 
 ### 1. Clone the repository
 ```bash
-git clone [https://github.com/Jaypath456/decoupled-Learning-Management-System.git](https://github.com/Jaypath456/decoupled-Learning-Management-System.git)
+git clone https://github.com/Jaypath456/decoupled-Learning-Management-System.git
 cd decoupled-Learning-Management-System
 ```
 
-### 2. Backend setup
+### 2. Start PostgreSQL and Redis
+Django connects to Postgres at `127.0.0.1:5432` and Redis at `127.0.0.1:6379` by default. A `connection refused` error on migrate means Postgres is not running (or the DB/user from `.env` do not exist yet).
+
+```bash
+# Debian/Ubuntu examples — adjust for your OS
+sudo service postgresql start   # or: sudo pg_ctlcluster 16 main start
+redis-server --daemonize yes    # or: sudo service redis-server start
+```
+
+Create the database and role to match `backend/.env.example` (once per machine):
+```bash
+sudo -u postgres psql -v ON_ERROR_STOP=1 <<'SQL'
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'classavo_user') THEN
+    CREATE ROLE classavo_user LOGIN PASSWORD 'your_password_here';
+  END IF;
+END
+$$;
+SELECT 'CREATE DATABASE classavo_db OWNER classavo_user'
+WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'classavo_db')\gexec
+GRANT ALL PRIVILEGES ON DATABASE classavo_db TO classavo_user;
+\c classavo_db
+GRANT ALL ON SCHEMA public TO classavo_user;
+ALTER SCHEMA public OWNER TO classavo_user;
+SQL
+```
+
+Confirm both services are up before continuing:
+```bash
+pg_isready -h 127.0.0.1 -p 5432
+redis-cli ping   # expect PONG
+```
+
+### 3. Backend setup
 ```bash
 cd backend
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
-```
-
-Copy the example environment file and fill in your own values:
-```bash
 cp .env.example .env
 ```
 
-At minimum you must set:
-* `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT` — your local PostgreSQL credentials.
+Edit `.env` and set at minimum:
+* `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT` — must match the Postgres role/database you created above.
+* `REDIS_URL` — defaults to `redis://127.0.0.1:6379/0`.
 * `SECRET_KEY` — a unique Django secret. Generate one with:
   ```bash
   python -c "import secrets; print(secrets.token_urlsafe(50))"
@@ -105,8 +136,24 @@ At minimum you must set:
 
 The app will refuse to start if `SECRET_KEY` is missing, so this step is not optional.
 
-Then apply migrations and run the server:
+Then apply migrations, seed demo data, and run the server:
 ```bash
 python manage.py migrate
+python manage.py seed_demo
 python manage.py runserver
 ```
+
+Demo logins printed by `seed_demo`:
+* Instructor: `demo_instructor` / `password123`
+* Student: `demo_student` / `password123`
+
+### 4. Frontend setup
+```bash
+cd frontend
+cp .env.example .env
+npm install
+npm start
+```
+
+* Frontend: [http://localhost:3000](http://localhost:3000)
+* Backend API: [http://localhost:8000/api](http://localhost:8000/api)
